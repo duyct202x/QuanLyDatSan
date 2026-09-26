@@ -105,7 +105,7 @@
 }
 
 .stat-value {
-  font-size: 1.55rem;
+  font-size: 1.3rem;
   font-weight: 800;
   font-family: var(--font-family-heading);
   color: var(--text-main);
@@ -184,6 +184,18 @@
 
 .btn-danger:hover {
   background: #dc2626;
+}
+
+.btn-outline-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.btn-outline-danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: #dc2626;
+  color: #ef4444;
 }
 
 .btn-warning {
@@ -604,7 +616,32 @@ input:checked + .slider:before {
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xl);
   overflow: hidden;
+  position: relative;
   animation: modalScaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auth-close-btn {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  background: none;
+  border: none;
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+  z-index: 5;
+}
+
+.auth-close-btn:hover {
+  background: var(--bg-input);
+  color: var(--text-main);
 }
 
 .auth-header {

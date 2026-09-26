@@ -3,7 +3,7 @@
 
 // 1. CSDL VẬN HÀNH THỰC TẾ (PRODUCTION DATABASE)
 const PROD_DEFAULT_DATA = {
-  version: "2.0_PROD",
+  version: "2.1_PROD",
   mode: "production",
   clubInfo: {
     name: "SMASH PRO Badminton Club",
@@ -42,50 +42,10 @@ const PROD_DEFAULT_DATA = {
     }
   ],
 
-  currentUser: {
-    id: "user_admin",
-    username: "admin",
-    role: "admin",
-    name: "Quản trị viên CLB",
-    phone: "0988776655",
-    memberId: "mem_admin",
-    type: "fixed",
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
-  },
+  currentUser: null,
 
-  // Danh sách thành viên CLB vận hành thực tế
-  members: [
-    {
-      id: "mem_admin",
-      username: "admin",
-      name: "Quản trị viên CLB",
-      role: "admin",
-      phone: "0988776655",
-      type: "fixed",
-      avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-      joinDate: "2026-09-01"
-    },
-    {
-      id: "mem_2",
-      username: "maianh",
-      name: "Trần Mai Anh (Thủ quỹ)",
-      role: "treasurer",
-      phone: "0912345678",
-      type: "fixed",
-      avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80",
-      joinDate: "2026-09-01"
-    },
-    {
-      id: "mem_3",
-      username: "hoanglong",
-      name: "Lê Hoàng Long",
-      role: "member",
-      phone: "0908889991",
-      type: "fixed",
-      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-      joinDate: "2026-09-05"
-    }
-  ],
+  // Danh sách thành viên CLB vận hành thực tế (Mặc định trống để CLB tự thêm/đăng ký thành viên thật)
+  members: [],
 
   // Danh sách các ca đặt sân & khảo sát vote thực tế
   sessions: [
@@ -104,11 +64,7 @@ const PROD_DEFAULT_DATA = {
       maxPlayers: 12,
       note: "Khởi động kỹ lúc 17:50, mang giày đế cao su không để lại vết!",
       status: "open",
-      votes: [
-        { memberId: "mem_admin", status: "going", guests: 0, votedAt: "2026-09-24 10:00" },
-        { memberId: "mem_2", status: "going", guests: 1, votedAt: "2026-09-24 11:30" },
-        { memberId: "mem_3", status: "going", guests: 0, votedAt: "2026-09-24 14:15" }
-      ]
+      votes: []
     },
     {
       id: "ses_poll_1",
@@ -148,31 +104,7 @@ const PROD_DEFAULT_DATA = {
         }
       ],
       selectedOptionId: null,
-      votes: [
-        { memberId: "mem_admin", selectedOptions: ["opt_1", "opt_2"], notGoing: false, guests: 0, votedAt: "2026-09-24 10:00" },
-        { memberId: "mem_2", selectedOptions: ["opt_2"], notGoing: false, guests: 1, votedAt: "2026-09-24 11:30" }
-      ]
-    },
-    {
-      id: "ses_past_1",
-      title: "Giao lưu cầu lông Chủ nhật tuần trước",
-      sessionType: "fixed",
-      voteMode: "standard",
-      date: "2026-09-20",
-      startTime: "18:00",
-      endTime: "20:00",
-      courtName: "Sân cầu lông Tre Xanh",
-      courtNumbers: "Sân 3 & Sân 4 (2 sân)",
-      courtPrice: 360000,
-      shuttleType: "Hải Yến Đỏ Pro (Tốc độ 77)",
-      maxPlayers: 12,
-      note: "Trận đấu giao lưu thành công tốt đẹp! Đã chốt số lượng tham gia.",
-      status: "completed",
-      votes: [
-        { memberId: "mem_admin", status: "going", guests: 0, votedAt: "2026-09-18 10:00" },
-        { memberId: "mem_2", status: "going", guests: 0, votedAt: "2026-09-18 11:30" },
-        { memberId: "mem_3", status: "going", guests: 0, votedAt: "2026-09-18 14:15" }
-      ]
+      votes: []
     }
   ],
 

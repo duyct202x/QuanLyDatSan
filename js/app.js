@@ -5,15 +5,18 @@ const App = {
   currentTab: 'dashboard',
   theme: 'light',
   currentRegisterMethod: 'phone', // 'phone' | 'name'
+  wasLoggedIn: false,
+  lastActivityTouch: 0,
 
   init() {
     this.initTheme();
     this.initEventListeners();
+    this.initActivityTracker();
     
     // Khởi tạo hệ thống lưu trữ Cloud
     AppStorage.init();
 
-    // Khởi tạo trước ScheduleModule và Dashboard để dữ liệu luôn hiển thị ngay từ lần đầu
+    // Khởi tạo trước ScheduleModule để dữ liệu lịch luôn hiển thị ngay từ lần đầu
     if (window.ScheduleModule) {
       ScheduleModule.init();
     }
@@ -25,19 +28,17 @@ const App = {
       initialTab = hash;
     }
 
-    // Kiểm tra trạng thái đăng nhập
-    if (!AppStorage.isLoggedIn()) {
-      this.renderUserHeaderAndSidebar();
-      this.showAuthModal('login');
-      this.renderTabContent(initialTab);
-    } else {
-      this.closeAuthModal();
-      this.renderUserHeaderAndSidebar();
-      this.refreshDashboardStats();
-      this.openTab(initialTab);
+    // Nếu vào thẳng tab Settings mà không phải Admin -> chuyển về Dashboard
+    if (initialTab === 'settings' && !AppStorage.isAdmin()) {
+      initialTab = 'dashboard';
     }
 
-    // Thiết lập đồng bộ ngầm định kỳ mỗi 30 giây
+    // Khởi tạo giao diện người dùng (Khách vãng lai hoặc User đã đăng nhập)
+    this.renderUserHeaderAndSidebar();
+    this.refreshDashboardStats();
+    this.openTab(initialTab);
+
+    // Thiết lập đồng bộ ngầm định kỳ mỗi 30 giây (chỉ khi có phiên đăng nhập)
     setInterval(() => {
       if (AppStorage.isLoggedIn()) {
         AppStorage.pullFromCloud(false);
@@ -53,6 +54,41 @@ const App = {
         }
       }
     }, 60000);
+  },
+
+  initActivityTracker() {
+    this.wasLoggedIn = AppStorage.isLoggedIn();
+
+    const onUserActivity = () => {
+      const now = Date.now();
+      if (now - this.lastActivityTouch > 10000) { // Throttle 10 giây
+        this.lastActivityTouch = now;
+        AppStorage.touchActivity();
+      }
+    };
+
+    ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(evt => {
+      window.addEventListener(evt, onUserActivity, { passive: true });
+    });
+
+    // Inactivity Watchdog: Tự động kiểm tra trạng thái hết hạn mỗi 10 giây
+    setInterval(() => {
+      const currentlyLoggedIn = AppStorage.isLoggedIn();
+      if (this.wasLoggedIn && !currentlyLoggedIn) {
+        this.wasLoggedIn = false;
+        this.handleSessionExpired();
+      } else if (currentlyLoggedIn) {
+        this.wasLoggedIn = true;
+      }
+    }, 10000);
+  },
+
+  handleSessionExpired() {
+    this.renderUserHeaderAndSidebar();
+    this.showToast("⚠️ Phiên đăng nhập đã tự động kết thúc do không hoạt động (15 phút). Bạn đang ở chế độ Khách vãng lai.", "warning");
+    if (this.currentTab === 'settings') {
+      this.openTab('dashboard');
+    }
   },
 
   initTheme() {
@@ -134,7 +170,6 @@ const App = {
   },
 
   closeAuthModal() {
-    if (!AppStorage.isLoggedIn()) return; // Không đóng nếu chưa đăng nhập
     const overlay = document.getElementById('auth-modal-overlay');
     if (overlay) {
       overlay.classList.remove('active');
@@ -234,10 +269,11 @@ const App = {
     event.preventDefault();
     const usernameInput = document.getElementById('auth-login-username')?.value;
     const passwordInput = document.getElementById('auth-login-password')?.value;
-    const remember = document.getElementById('auth-login-remember')?.checked ?? true;
+    const remember = document.getElementById('auth-login-remember')?.checked ?? false;
 
     const result = AppStorage.login(usernameInput, passwordInput, remember);
     if (result.success) {
+      this.wasLoggedIn = true;
       this.closeAuthModal();
       this.renderUserHeaderAndSidebar();
       this.refreshDashboardStats();
@@ -255,7 +291,7 @@ const App = {
     const password = document.getElementById('auth-reg-password')?.value;
     const confirmPassword = document.getElementById('auth-reg-confirm-password')?.value;
     const memberType = document.getElementById('auth-reg-member-type')?.value || 'fixed';
-    const remember = document.getElementById('auth-reg-remember')?.checked ?? true;
+    const remember = document.getElementById('auth-reg-remember')?.checked ?? false;
 
     const result = AppStorage.register({
       name,
@@ -268,6 +304,7 @@ const App = {
     });
 
     if (result.success) {
+      this.wasLoggedIn = true;
       this.closeAuthModal();
       this.renderUserHeaderAndSidebar();
       this.refreshDashboardStats();
@@ -279,14 +316,17 @@ const App = {
   },
 
   logout() {
-    AppStorage.logout();
+    AppStorage.logout(true);
+    this.wasLoggedIn = false;
     const loginUser = document.getElementById('auth-login-username');
     const loginPwd = document.getElementById('auth-login-password');
     if (loginUser) loginUser.value = '';
     if (loginPwd) loginPwd.value = '';
     this.renderUserHeaderAndSidebar();
-    this.showAuthModal('login');
-    this.showToast("Đã đăng xuất tài khoản thành công!", "info");
+    if (this.currentTab === 'settings') {
+      this.openTab('dashboard');
+    }
+    this.showToast("Đã đăng xuất tài khoản thành công! Bạn đang ở chế độ Khách vãng lai.", "info");
   },
 
   // ==========================================
@@ -294,18 +334,13 @@ const App = {
   // ==========================================
 
   openTab(tabId) {
-    if (!AppStorage.isLoggedIn()) {
+    const isAdmin = AppStorage.isAdmin();
+
+    // Chặn truy cập Tab Cài đặt nếu không phải Admin
+    if (tabId === 'settings' && !isAdmin) {
+      this.showToast("⚠️ Trang Cài đặt & Quản trị chỉ dành cho Ban quản trị CLB. Vui lòng đăng nhập Admin!", "warning");
       this.showAuthModal('login');
       return;
-    }
-
-    const currentUser = AppStorage.getCurrentUser();
-    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'treasurer');
-
-    // Chặn truy cập các Tab quản trị nếu không phải Admin
-    if ((tabId === 'bill-splitter' || tabId === 'settings') && !isAdmin) {
-      this.showToast("⚠️ Tính năng này chỉ dành riêng cho Ban quản trị CLB!", "warning");
-      tabId = 'dashboard';
     }
 
     this.currentTab = tabId;
@@ -400,7 +435,7 @@ const App = {
     if (dashBal) dashBal.innerText = `${fundBalance.toLocaleString('vi-VN')} đ`;
 
     const dashDues = document.getElementById('dash-paid-members');
-    if (dashDues) dashDues.innerText = `${monthDues.length}/${Math.max(1, fixedMembers.length)} thành viên`;
+    if (dashDues) dashDues.innerText = `${monthDues.length}/${fixedMembers.length} thành viên`;
 
     const dashPending = document.getElementById('dash-pending-dues');
     if (dashPending) dashPending.innerText = `${pendingDues.length} chờ duyệt`;
@@ -427,25 +462,49 @@ const App = {
 
   renderUserHeaderAndSidebar() {
     const currentUser = AppStorage.getCurrentUser();
+    const isAdmin = AppStorage.isAdmin();
+    const isSuperAdmin = AppStorage.isSuperAdmin();
+
+    const userAvatarEl = document.getElementById('header-user-avatar');
+    const userNameEl = document.getElementById('header-user-name');
+    const userRoleBadgeEl = document.getElementById('header-user-role');
+    const headerBtnWrapper = document.getElementById('header-auth-btn-wrapper');
+    const sidebarBtnWrapper = document.getElementById('sidebar-auth-btn-wrapper');
+    const roleSwitcherBox = document.querySelector('.role-switcher-box');
+    const roleSelect = document.getElementById('user-role-select');
+
     if (!currentUser) {
+      // 1. Chế độ Khách vãng lai (Guest Mode)
       document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.member-only').forEach(el => el.style.display = 'none');
-      const roleSwitcherBox = document.querySelector('.role-switcher-box');
+      document.querySelectorAll('.member-only').forEach(el => el.style.display = '');
       if (roleSwitcherBox) roleSwitcherBox.style.display = 'none';
-      const userNameEl = document.getElementById('header-user-name');
-      if (userNameEl) userNameEl.innerText = 'Chưa đăng nhập';
-      const userRoleBadgeEl = document.getElementById('header-user-role');
+
+      if (userAvatarEl) userAvatarEl.src = 'https://ui-avatars.com/api/?name=Khach&background=64748b&color=fff';
+      if (userNameEl) userNameEl.innerText = 'Khách vãng lai';
       if (userRoleBadgeEl) {
-        userRoleBadgeEl.innerText = 'Khách';
+        userRoleBadgeEl.innerText = 'Chưa đăng nhập';
         userRoleBadgeEl.className = 'badge badge-neutral';
+      }
+
+      if (headerBtnWrapper) {
+        headerBtnWrapper.innerHTML = `
+          <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login')" title="Đăng nhập tài khoản" style="padding: 0.4rem 0.65rem;">
+            <i class="fas fa-sign-in-alt"></i> <span class="hidden md:inline">Đăng nhập</span>
+          </button>
+        `;
+      }
+
+      if (sidebarBtnWrapper) {
+        sidebarBtnWrapper.innerHTML = `
+          <button class="btn btn-primary btn-sm w-full" style="margin-top: 0.75rem; justify-content: center;" onclick="App.showAuthModal('login')">
+            <i class="fas fa-sign-in-alt"></i> Đăng nhập / Đăng ký
+          </button>
+        `;
       }
       return;
     }
 
-    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'treasurer';
-    const isSuperAdmin = currentUser.role === 'admin';
-
-    // Phân quyền hiển thị Menu Admin / Member
+    // 2. Chế độ Người dùng đã đăng nhập (Admin / Thủ quỹ / Member)
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = isAdmin ? '' : 'none';
     });
@@ -453,23 +512,31 @@ const App = {
       el.style.display = isAdmin ? 'none' : '';
     });
 
-    // Cập nhật Avatar và Tên trên Header
-    const userAvatarEl = document.getElementById('header-user-avatar');
-    if (userAvatarEl) userAvatarEl.src = currentUser.avatar;
-    
-    const userNameEl = document.getElementById('header-user-name');
+    if (userAvatarEl) userAvatarEl.src = currentUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name)}&background=10b981&color=fff`;
     if (userNameEl) userNameEl.innerText = currentUser.name;
 
-    const userRoleBadgeEl = document.getElementById('header-user-role');
     if (userRoleBadgeEl) {
       userRoleBadgeEl.innerText = currentUser.role === 'admin' ? 'Admin / Chủ CLB' : currentUser.role === 'treasurer' ? 'Thủ quỹ CLB' : 'Thành viên';
       userRoleBadgeEl.className = `badge ${currentUser.role === 'admin' ? 'badge-warning' : currentUser.role === 'treasurer' ? 'badge-info' : 'badge-neutral'}`;
     }
 
-    // Role Switcher ở Sidebar: CHỈ HIỂN THỊ KHI LÀ ADMIN (để admin test các vai trò khác)
-    const roleSwitcherBox = document.querySelector('.role-switcher-box');
-    const roleSelect = document.getElementById('user-role-select');
-    
+    if (headerBtnWrapper) {
+      headerBtnWrapper.innerHTML = `
+        <button class="btn btn-secondary btn-sm" onclick="App.logout()" title="Đăng xuất tài khoản" style="padding: 0.4rem 0.65rem;">
+          <i class="fas fa-sign-out-alt"></i> <span class="hidden md:inline">Đăng xuất</span>
+        </button>
+      `;
+    }
+
+    if (sidebarBtnWrapper) {
+      sidebarBtnWrapper.innerHTML = `
+        <button class="btn btn-secondary btn-sm w-full" style="margin-top: 0.75rem; justify-content: center;" onclick="App.logout()">
+          <i class="fas fa-sign-out-alt"></i> Đăng xuất
+        </button>
+      `;
+    }
+
+    // Role Switcher ở Sidebar: CHỈ HIỂN THỊ KHI LÀ ADMIN
     if (roleSwitcherBox) {
       if (isSuperAdmin) {
         roleSwitcherBox.style.display = 'block';
@@ -483,7 +550,6 @@ const App = {
           `).join('');
         }
       } else {
-        // Ẩn hoàn toàn role switcher với người dùng bình thường để bảo mật
         roleSwitcherBox.style.display = 'none';
       }
     }

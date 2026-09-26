@@ -10,7 +10,7 @@ const FundModule = {
     const dues = data.monthlyContributions || [];
     const monthlyFee = data.clubInfo.monthlyFee || 300000;
     const currentUser = data.currentUser;
-    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'treasurer';
+    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'treasurer');
 
     // Current month dues data
     const monthDues = dues.filter(d => d.month === this.currentMonth);
@@ -82,7 +82,7 @@ const FundModule = {
             </div>
 
             <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
-              <button class="btn btn-primary btn-sm flex-1" onclick="FundModule.openPaymentModal('${currentUser.id}')">
+              <button class="btn btn-primary btn-sm flex-1" onclick="FundModule.openPaymentModal('${currentUser ? currentUser.id : ''}')">
                 <i class="fas fa-qrcode"></i> Đóng quỹ VietQR
               </button>
               ${isAdmin ? `
@@ -106,7 +106,7 @@ const FundModule = {
 
     const data = AppStorage.loadData();
     const currentUser = data.currentUser;
-    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'treasurer';
+    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'treasurer');
 
     let filtered = monthDues;
     if (this.currentFilter !== 'all') {
@@ -137,7 +137,7 @@ const FundModule = {
         statusBadge = `<span class="badge badge-unpaid"><i class="fas fa-exclamation"></i> Chưa đóng</span>`;
       }
 
-      const isSelf = member.id === currentUser.id;
+      const isSelf = currentUser && member.id === currentUser.id;
 
       return `
         <tr>
@@ -400,10 +400,17 @@ const FundModule = {
   },
 
   approveDue(dueIdOrMemberId, isApproved) {
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền duyệt đóng quỹ!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
+
     const data = AppStorage.loadData();
     const dues = data.monthlyContributions || [];
     const info = data.clubInfo;
-    const currentUser = data.currentUser;
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    const approverName = (currentUser && currentUser.name) || 'Ban quản trị CLB';
 
     const due = dues.find(d => (d.id === dueIdOrMemberId || d.memberId === dueIdOrMemberId) && d.month === this.currentMonth);
     if (!due) return;
@@ -412,7 +419,7 @@ const FundModule = {
 
     if (isApproved) {
       due.status = 'paid';
-      due.approvedBy = currentUser.name;
+      due.approvedBy = approverName;
       due.approvedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
       // Add to transactions
@@ -424,7 +431,7 @@ const FundModule = {
         category: 'Quỹ tháng',
         title: `Thu quỹ T${this.currentMonth.slice(5)} từ ${member.name}`,
         amount: due.amount || info.monthlyFee,
-        createdBy: currentUser.name,
+        createdBy: approverName,
         note: `Admin duyệt chuyển khoản`
       });
 
@@ -441,8 +448,16 @@ const FundModule = {
   },
 
   markPaidCash(memberId) {
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi nhận thu tiền mặt!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
+
     const data = AppStorage.loadData();
     const info = data.clubInfo;
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    const approverName = (currentUser && currentUser.name) || 'Ban quản trị CLB';
     const member = (data.members || []).find(m => m.id === memberId);
     if (!member) return;
 
@@ -460,7 +475,7 @@ const FundModule = {
       paidAt: nowStr,
       method: 'Tiền mặt',
       billImage: null,
-      approvedBy: data.currentUser.name,
+      approvedBy: approverName,
       approvedAt: nowStr,
       note: 'Đã nộp tiền mặt trực tiếp'
     };
@@ -480,7 +495,7 @@ const FundModule = {
       category: 'Quỹ tháng',
       title: `Thu tiền mặt quỹ T${this.currentMonth.slice(5)} từ ${member.name}`,
       amount: info.monthlyFee || 300000,
-      createdBy: data.currentUser.name,
+      createdBy: approverName,
       note: 'Tiền mặt thu trên sân'
     });
 

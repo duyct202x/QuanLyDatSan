@@ -19,33 +19,42 @@ const AppStorage = {
     this.pullFromCloud(false); // Đồng bộ ngầm từ Google Drive khi mở app
   },
 
-  // Đảm bảo cấu trúc CSDL hợp lệ và có sẵn tài khoản Admin mặc định
+  // Đảm bảo cấu trúc CSDL hợp lệ
   ensureDatabaseSchema() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (!stored) {
         // Khởi tạo mặc định CSDL Vận hành thực tế (Production)
         const initialProd = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA));
+        initialProd.currentUser = null; // Mặc định chế độ Khách vãng lai
+        initialProd.lastModified = Date.now();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(initialProd));
-        
-        // Mặc định tạo session đăng nhập Admin cho người dùng lần đầu
-        const adminUser = initialProd.users[0];
-        const defaultSession = {
-          id: adminUser.id,
-          username: adminUser.username,
-          name: adminUser.name,
-          role: adminUser.role,
-          memberId: adminUser.memberId,
-          loginAt: new Date().toISOString()
-        };
-        localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(defaultSession));
       } else {
         const parsed = JSON.parse(stored);
         let updated = false;
 
-        // Tự động nâng cấp schema nếu phiên bản cũ
-        if (parsed.version !== PROD_DEFAULT_DATA.version) {
+        // Tự động nâng cấp schema và dọn dẹp dữ liệu mẫu phiên bản cũ
+        if (parsed.version !== PROD_DEFAULT_DATA.version || 
+            (Array.isArray(parsed.members) && parsed.members.some(m => m.id === 'mem_2' || m.id === 'mem_3' || m.id === 'mem_admin'))) {
           parsed.version = PROD_DEFAULT_DATA.version;
+          
+          if (Array.isArray(parsed.members)) {
+            parsed.members = parsed.members.filter(m => m.id !== 'mem_2' && m.id !== 'mem_3' && m.id !== 'mem_admin');
+          }
+          if (Array.isArray(parsed.monthlyContributions)) {
+            parsed.monthlyContributions = parsed.monthlyContributions.filter(d => d.memberId !== 'mem_2' && d.memberId !== 'mem_3' && d.memberId !== 'mem_admin');
+          }
+          if (Array.isArray(parsed.sessions)) {
+            parsed.sessions.forEach(s => {
+              if (Array.isArray(s.votes)) {
+                s.votes = s.votes.filter(v => v.memberId !== 'mem_2' && v.memberId !== 'mem_3' && v.memberId !== 'mem_admin');
+              }
+            });
+          }
+          if (Array.isArray(parsed.users)) {
+            parsed.users = parsed.users.filter(u => u.username !== 'maianh' && u.username !== 'hoanglong' && u.id !== 'user_mem2');
+          }
+          parsed.lastModified = Date.now();
           updated = true;
         }
 
@@ -60,28 +69,22 @@ const AppStorage = {
           updated = true;
         }
 
-        if (!parsed.members || parsed.members.length === 0) {
-          parsed.members = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.members));
+        if (!parsed.members || !Array.isArray(parsed.members)) {
+          parsed.members = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.members || []));
           updated = true;
         }
 
-        // Đảm bảo các buổi đánh mặc định luôn tồn tại đầy đủ
-        if (!parsed.sessions || parsed.sessions.length === 0) {
-          parsed.sessions = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.sessions));
+        // Khởi tạo danh sách buổi đánh nếu chưa có trong CSDL
+        if (!parsed.sessions || !Array.isArray(parsed.sessions)) {
+          parsed.sessions = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.sessions || []));
           updated = true;
-        } else {
-          // Bổ sung các buổi ses_1, ses_poll_1, ses_past_1 nếu chưa có trong sessions
-          PROD_DEFAULT_DATA.sessions.forEach(defaultSes => {
-            const exists = parsed.sessions.some(s => s.id === defaultSes.id);
-            if (!exists) {
-              parsed.sessions.push(JSON.parse(JSON.stringify(defaultSes)));
-              updated = true;
-            }
-          });
         }
 
-        if (!parsed.monthlyContributions) { parsed.monthlyContributions = []; updated = true; }
-        if (!parsed.transactions || parsed.transactions.length === 0) {
+        if (!parsed.monthlyContributions || !Array.isArray(parsed.monthlyContributions)) { 
+          parsed.monthlyContributions = []; 
+          updated = true; 
+        }
+        if (!parsed.transactions || !Array.isArray(parsed.transactions)) {
           parsed.transactions = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.transactions || []));
           updated = true;
         }
@@ -90,24 +93,6 @@ const AppStorage = {
 
         if (updated) {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-        }
-
-        // Đảm bảo luôn có session đăng nhập nếu chưa từng đăng xuất
-        const isExplicitlyLoggedOut = localStorage.getItem('SMASH_PRO_LOGGED_OUT') === 'true';
-        const session = localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY);
-        if (!session && !isExplicitlyLoggedOut) {
-          const defaultAdmin = parsed.users.find(u => u.username === 'admin') || parsed.users[0];
-          if (defaultAdmin) {
-            const defaultSession = {
-              id: defaultAdmin.id,
-              username: defaultAdmin.username,
-              name: defaultAdmin.name,
-              role: defaultAdmin.role,
-              memberId: defaultAdmin.memberId,
-              loginAt: new Date().toISOString()
-            };
-            localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(defaultSession));
-          }
         }
       }
     } catch (e) {
@@ -137,6 +122,7 @@ const AppStorage = {
   // Lưu toàn bộ CSDL và phát sự kiện đồng bộ
   saveData(data, syncToCloud = true) {
     try {
+      data.lastModified = Date.now();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       window.dispatchEvent(new CustomEvent("app-state-changed", { detail: data }));
 
@@ -152,35 +138,67 @@ const AppStorage = {
   // HỆ THỐNG XÁC THỰC & QUẢN LÝ NGƯỜI DÙNG (AUTH)
   // ==========================================
 
-  // Lấy thông tin tài khoản đang đăng nhập hiện tại
+  // Thời gian hết hạn do không hoạt động (15 phút)
+  INACTIVITY_TIMEOUT: 15 * 60 * 1000,
+  // Thời gian sống của phiên khi tick "Ghi nhớ" (24 giờ)
+  SESSION_REMEMBER_TTL: 24 * 60 * 60 * 1000,
+  // Thời gian sống của phiên tạm thời khi không tick "Ghi nhớ" (2 giờ)
+  SESSION_TEMP_TTL: 2 * 60 * 60 * 1000,
+
+  // Lấy thông tin tài khoản đang đăng nhập hiện tại (An toàn, kiểm tra TTL & Inactivity)
   getCurrentUser() {
     try {
-      const session = localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY);
-      if (session) {
-        const parsed = JSON.parse(session);
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          const data = JSON.parse(stored);
-          const user = (data.users || []).find(u => u.id === parsed.id || u.username === parsed.username);
-          if (user) return user;
-        }
-      } else {
-        const isExplicitlyLoggedOut = localStorage.getItem('SMASH_PRO_LOGGED_OUT') === 'true';
-        if (!isExplicitlyLoggedOut) {
-          const stored = localStorage.getItem(STORAGE_KEY);
-          if (stored) {
-            const data = JSON.parse(stored);
-            if (data.users && data.users.length > 0) {
-              return data.users.find(u => u.username === 'admin') || data.users[0];
-            }
-          }
-          return PROD_DEFAULT_DATA.users[0];
-        }
+      const rawSession = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
+      if (!rawSession) {
+        return null; // Chế độ Khách vãng lai (Guest)
+      }
+
+      const session = JSON.parse(rawSession);
+      const now = Date.now();
+
+      // 1. Kiểm tra thời hạn sống tuyệt đối của phiên (Session TTL)
+      if (session.expiresAt && now > session.expiresAt) {
+        console.warn("[Auth] Phiên đăng nhập đã hết hạn TTL. Tự động đăng xuất.");
+        this.logout(false);
+        return null;
+      }
+
+      // 2. Kiểm tra thời gian không hoạt động (Inactivity Timeout 15 phút)
+      if (session.lastActivity && (now - session.lastActivity > this.INACTIVITY_TIMEOUT)) {
+        console.warn("[Auth] Quá 15 phút không có thao tác. Tự động đăng xuất.");
+        this.logout(false);
+        return null;
+      }
+
+      // 3. Truy vấn thông tin người dùng trong CSDL
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const data = JSON.parse(stored);
+        const user = (data.users || []).find(u => u.id === session.id || u.username === session.username);
+        if (user) return user;
       }
     } catch (e) {
-      console.error("Lỗi lấy phiên đăng nhập:", e);
+      console.error("Lỗi xác thực phiên đăng nhập:", e);
     }
     return null;
+  },
+
+  // Cập nhật timestamp hoạt động người dùng (Gia hạn thời gian Inactivity)
+  touchActivity() {
+    try {
+      const rawSession = sessionStorage.getItem(AUTH_SESSION_KEY) || localStorage.getItem(AUTH_SESSION_KEY);
+      if (!rawSession) return;
+      const session = JSON.parse(rawSession);
+      session.lastActivity = Date.now();
+      
+      if (sessionStorage.getItem(AUTH_SESSION_KEY)) {
+        sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+      } else if (localStorage.getItem(AUTH_SESSION_KEY)) {
+        localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+      }
+    } catch (e) {
+      // Ignored
+    }
   },
 
   // Kiểm tra trạng thái đã đăng nhập hay chưa
@@ -188,8 +206,31 @@ const AppStorage = {
     return this.getCurrentUser() !== null;
   },
 
-  // Đăng nhập hệ thống (Mặc định admin/admin)
-  login(usernameOrPhone, password, remember = true) {
+  // Kiểm tra quyền Admin/Thủ quỹ
+  isAdmin() {
+    const u = this.getCurrentUser();
+    return !!(u && (u.role === 'admin' || u.role === 'treasurer'));
+  },
+
+  // Kiểm tra quyền Super Admin
+  isSuperAdmin() {
+    const u = this.getCurrentUser();
+    return !!(u && u.role === 'admin');
+  },
+
+  // Kiểm tra quyền Thành viên thường
+  isMember() {
+    const u = this.getCurrentUser();
+    return !!(u && u.role === 'member');
+  },
+
+  // Kiểm tra quyền Khách vãng lai
+  isGuest() {
+    return !this.isLoggedIn();
+  },
+
+  // Đăng nhập hệ thống
+  login(usernameOrPhone, password, remember = false) {
     this.ensureDatabaseSchema();
     const data = this.loadData();
     const input = (usernameOrPhone || "").trim().toLowerCase();
@@ -211,22 +252,27 @@ const AppStorage = {
       };
     }
 
-    // Lưu phiên đăng nhập
+    // Lưu phiên đăng nhập có TTL và Inactivity Timer
+    const now = Date.now();
     const sessionData = {
       id: user.id,
       username: user.username,
       name: user.name,
       role: user.role,
       memberId: user.memberId,
-      loginAt: new Date().toISOString()
+      loginAt: new Date().toISOString(),
+      lastActivity: now,
+      remember: !!remember,
+      expiresAt: now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL)
     };
 
     localStorage.removeItem('SMASH_PRO_LOGGED_OUT');
     if (remember) {
       localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
     } else {
       sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
-      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
+      localStorage.removeItem(AUTH_SESSION_KEY);
     }
 
     // Cập nhật CSDL đồng bộ currentUser
@@ -336,17 +382,27 @@ const AppStorage = {
     // Lưu CSDL và đồng bộ Cloud
     this.saveData(data, true);
 
-    // Lưu phiên đăng nhập
+    // Lưu phiên đăng nhập có TTL và Inactivity Timer
+    const now = Date.now();
     const sessionData = {
       id: newUser.id,
       username: newUser.username,
       name: newUser.name,
       role: newUser.role,
       memberId: newUser.memberId,
-      loginAt: new Date().toISOString()
+      loginAt: new Date().toISOString(),
+      lastActivity: now,
+      remember: !!remember,
+      expiresAt: now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL)
     };
     localStorage.removeItem('SMASH_PRO_LOGGED_OUT');
-    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
+    if (remember) {
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
+    } else {
+      sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sessionData));
+      localStorage.removeItem(AUTH_SESSION_KEY);
+    }
 
     return { 
       success: true, 
@@ -356,8 +412,10 @@ const AppStorage = {
   },
 
   // Đăng xuất khỏi hệ thống
-  logout() {
-    localStorage.setItem('SMASH_PRO_LOGGED_OUT', 'true');
+  logout(explicit = true) {
+    if (explicit) {
+      localStorage.setItem('SMASH_PRO_LOGGED_OUT', 'true');
+    }
     localStorage.removeItem(AUTH_SESSION_KEY);
     sessionStorage.removeItem(AUTH_SESSION_KEY);
     
@@ -368,6 +426,7 @@ const AppStorage = {
         const data = JSON.parse(stored);
         data.currentUser = null;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        window.dispatchEvent(new CustomEvent("app-state-changed", { detail: data }));
       }
     } catch (e) {
       console.error("Lỗi xóa phiên trong CSDL:", e);
@@ -381,13 +440,13 @@ const AppStorage = {
   switchDatabaseMode(mode) {
     if (mode === 'test') {
       const testData = JSON.parse(JSON.stringify(TEST_MOCK_DATA));
-      testData.currentUser = testData.users[0]; // Admin test
+      testData.currentUser = this.getCurrentUser();
       this.activeSheet = 'CSDL_KiemThu_Test';
       this.saveData(testData, true);
       return testData;
     } else {
       const prodData = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA));
-      prodData.currentUser = prodData.users[0]; // Admin prod
+      prodData.currentUser = this.getCurrentUser();
       this.activeSheet = 'CSDL_VanHanh_Prod';
       this.saveData(prodData, true);
       return prodData;
@@ -460,7 +519,50 @@ const AppStorage = {
         console.log("Dữ liệu cloud chưa phải JSON hoặc chưa khởi tạo:", text);
       }
 
-      if (cloudData && cloudData.clubInfo && cloudData.users && cloudData.sessions && cloudData.sessions.length > 0) {
+      if (cloudData && cloudData.clubInfo && cloudData.users && Array.isArray(cloudData.sessions)) {
+        // Tự động chuẩn hóa dữ liệu đám mây nếu chứa dữ liệu mẫu hoặc phiên bản cũ
+        let cloudNeedsClean = false;
+        if (cloudData.version !== PROD_DEFAULT_DATA.version || 
+            (Array.isArray(cloudData.members) && cloudData.members.some(m => m.id === 'mem_2' || m.id === 'mem_3' || m.id === 'mem_admin'))) {
+          cloudData.version = PROD_DEFAULT_DATA.version;
+          if (Array.isArray(cloudData.members)) {
+            cloudData.members = cloudData.members.filter(m => m.id !== 'mem_2' && m.id !== 'mem_3' && m.id !== 'mem_admin');
+          }
+          if (Array.isArray(cloudData.monthlyContributions)) {
+            cloudData.monthlyContributions = cloudData.monthlyContributions.filter(d => d.memberId !== 'mem_2' && d.memberId !== 'mem_3' && d.memberId !== 'mem_admin');
+          }
+          if (Array.isArray(cloudData.sessions)) {
+            cloudData.sessions.forEach(s => {
+              if (Array.isArray(s.votes)) {
+                s.votes = s.votes.filter(v => v.memberId !== 'mem_2' && v.memberId !== 'mem_3' && v.memberId !== 'mem_admin');
+              }
+            });
+          }
+          if (Array.isArray(cloudData.users)) {
+            cloudData.users = cloudData.users.filter(u => u.username !== 'maianh' && u.username !== 'hoanglong' && u.id !== 'user_mem2');
+          }
+          cloudData.lastModified = Date.now();
+          cloudNeedsClean = true;
+        }
+
+        // Kiểm tra timestamp để tránh việc đám mây cũ ghi đè dữ liệu mới xóa/thay đổi tại local
+        const localStored = localStorage.getItem(STORAGE_KEY);
+        let localMod = 0;
+        if (localStored) {
+          try {
+            const parsedLocal = JSON.parse(localStored);
+            localMod = parsedLocal.lastModified || 0;
+          } catch(e) {}
+        }
+        const cloudMod = cloudData.lastModified || 0;
+
+        if (!cloudNeedsClean && localMod > cloudMod && (localMod - cloudMod) > 500) {
+          console.log("[CloudSync] Dữ liệu local mới hơn Cloud. Đẩy local lên Google Drive...");
+          const localData = this.loadData();
+          await this.pushToCloud(localData, false);
+          return localData;
+        }
+
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudData));
         this.lastSyncedTime = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
         this.cloudSyncStatus = 'synced';
@@ -468,6 +570,11 @@ const AppStorage = {
         
         window.dispatchEvent(new CustomEvent("app-state-changed", { detail: cloudData }));
         
+        if (cloudNeedsClean) {
+          console.log("[CloudSync] Đã dọn dẹp dữ liệu cũ trên Cloud, đồng bộ phiên bản sạch 2.1_PROD...");
+          await this.pushToCloud(cloudData, false);
+        }
+
         if (showToast && window.App) {
           App.showToast(`☁️ Đã nạp CSDL từ Google Sheet (${this.activeSheet})!`, "success");
         }

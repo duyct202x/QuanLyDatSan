@@ -120,6 +120,12 @@ const CashbookModule = {
   },
 
   openAddTransactionModal() {
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
+
     const today = new Date().toISOString().slice(0, 10);
     const modalBody = `
       <form id="form-add-tx" onsubmit="CashbookModule.saveTransaction(event)">
@@ -182,6 +188,12 @@ const CashbookModule = {
 
   saveTransaction(e) {
     e.preventDefault();
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
+
     const data = AppStorage.loadData();
     const type = document.querySelector('input[name="tx-type"]:checked').value;
     const title = document.getElementById('tx-title').value.trim();
@@ -189,6 +201,8 @@ const CashbookModule = {
     const category = document.getElementById('tx-category').value;
     const date = document.getElementById('tx-date').value;
     const note = document.getElementById('tx-note').value.trim();
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    const creatorName = (currentUser && currentUser.name) || 'Ban quản trị CLB';
 
     if (!data.transactions) data.transactions = [];
 
@@ -199,7 +213,7 @@ const CashbookModule = {
       category,
       title,
       amount,
-      createdBy: data.currentUser.name,
+      createdBy: creatorName,
       note
     };
 

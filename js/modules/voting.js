@@ -7,6 +7,11 @@ const VotingModule = {
   guestCount: 0,
 
   openVoteModal(sessionId) {
+    if (!AppStorage.isLoggedIn()) {
+      App.showToast("Vui lòng đăng nhập để bình chọn ca đánh!", "info");
+      App.showAuthModal('login');
+      return;
+    }
     const data = AppStorage.loadData();
     const session = (data.sessions || []).find(s => s.id === sessionId);
     if (!session) return;
@@ -28,8 +33,13 @@ const VotingModule = {
 
     const voteLockHours = data.clubInfo.voteLockHours || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const currentUser = data.currentUser;
-    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'treasurer';
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    if (!currentUser) {
+      App.showToast("Vui lòng đăng nhập để thực hiện bình chọn!", "info");
+      App.showAuthModal('login');
+      return;
+    }
+    const isAdmin = AppStorage.isAdmin();
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -127,11 +137,18 @@ const VotingModule = {
         <input type="text" id="vote-note" class="form-control" placeholder="VD: Khung giờ 19h30 thì mình đến kịp, 18h sợ kẹt xe..." value="${existingVote && existingVote.note ? existingVote.note : ''}">
       </div>
 
-      <div class="modal-footer" style="padding: 1.25rem 0 0 0;">
-        <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
-        <button type="button" class="btn btn-primary" onclick="VotingModule.submitMultiOptionVote('${sessionId}')">
-          <i class="fas fa-save"></i> Xác nhận bình chọn
-        </button>
+      <div class="modal-footer" style="padding: 1.25rem 0 0 0; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <button type="button" class="btn btn-outline-danger btn-sm" onclick="ScheduleModule.confirmDeleteSession('${sessionId}')" title="Xóa buổi khảo sát này">
+            <i class="fas fa-trash-alt"></i> Xóa buổi
+          </button>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+          <button type="button" class="btn btn-primary" onclick="VotingModule.submitMultiOptionVote('${sessionId}')">
+            <i class="fas fa-save"></i> Xác nhận bình chọn
+          </button>
+        </div>
       </div>
     `;
 
@@ -215,7 +232,12 @@ const VotingModule = {
     }
 
     if (!session.votes) session.votes = [];
-    const currentUser = data.currentUser;
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    if (!currentUser) {
+      App.showToast("Vui lòng đăng nhập để lưu kết quả!", "error");
+      App.showAuthModal('login');
+      return;
+    }
     const note = document.getElementById('vote-note')?.value.trim() || '';
 
     const index = session.votes.findIndex(v => v.memberId === currentUser.id);
@@ -264,8 +286,13 @@ const VotingModule = {
 
     const voteLockHours = data.clubInfo.voteLockHours || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const currentUser = data.currentUser;
-    const isAdmin = currentUser.role === 'admin' || currentUser.role === 'treasurer';
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    if (!currentUser) {
+      App.showToast("Vui lòng đăng nhập để thực hiện bình chọn!", "info");
+      App.showAuthModal('login');
+      return;
+    }
+    const isAdmin = AppStorage.isAdmin();
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -358,11 +385,18 @@ const VotingModule = {
         </div>
       ` : ''}
 
-      <div class="modal-footer" style="padding: 1.25rem 0 0 0;">
-        <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
-        <button type="button" class="btn btn-primary" onclick="VotingModule.submitVote('${sessionId}')">
-          <i class="fas fa-save"></i> Xác nhận bình chọn
-        </button>
+      <div class="modal-footer" style="padding: 1.25rem 0 0 0; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <button type="button" class="btn btn-outline-danger btn-sm" onclick="ScheduleModule.confirmDeleteSession('${sessionId}')" title="Xóa buổi đặt sân này">
+            <i class="fas fa-trash-alt"></i> Xóa buổi
+          </button>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+          <button type="button" class="btn btn-primary" onclick="VotingModule.submitVote('${sessionId}')">
+            <i class="fas fa-save"></i> Xác nhận bình chọn
+          </button>
+        </div>
       </div>
     `;
 
@@ -413,7 +447,12 @@ const VotingModule = {
 
     if (!session.votes) session.votes = [];
 
-    const currentUser = data.currentUser;
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    if (!currentUser) {
+      App.showToast("Vui lòng đăng nhập để lưu kết quả!", "error");
+      App.showAuthModal('login');
+      return;
+    }
     const note = document.getElementById('vote-note')?.value.trim() || '';
 
     const index = session.votes.findIndex(v => v.memberId === currentUser.id);

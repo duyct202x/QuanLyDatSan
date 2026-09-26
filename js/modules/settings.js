@@ -2,6 +2,12 @@
 
 const SettingsModule = {
   renderSettings() {
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Trang Cài đặt & Quản trị chỉ dành riêng cho Ban quản trị CLB!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
+
     const data = AppStorage.loadData();
     const info = data.clubInfo;
     const bank = info.bank;
@@ -37,6 +43,11 @@ const SettingsModule = {
 
   saveClubSettings(e) {
     e.preventDefault();
+    if (!AppStorage.isAdmin()) {
+      App.showToast("Chỉ Ban quản trị mới có quyền lưu cấu hình CLB!", "warning");
+      App.showAuthModal('login');
+      return;
+    }
     const data = AppStorage.loadData();
 
     data.clubInfo.name = document.getElementById('set-club-name').value.trim();
@@ -69,6 +80,24 @@ const SettingsModule = {
     const container = document.getElementById('members-admin-list');
     if (!container) return;
 
+    if (members.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--bg-input); border-radius: var(--radius-md); border: 1px dashed var(--border-color);">
+          <div style="width: 52px; height: 52px; border-radius: 50%; background: rgba(16, 185, 129, 0.1); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 0.75rem;">
+            <i class="fas fa-user-plus"></i>
+          </div>
+          <div style="font-weight: 700; color: var(--text-main); font-size: 1rem; margin-bottom: 0.35rem;">Chưa có thành viên nào trong danh sách</div>
+          <p style="font-size: 0.85rem; margin-bottom: 1rem; max-width: 380px; margin-left: auto; margin-right: auto;">
+            CLB đang sẵn sàng nhận đăng ký. Bạn có thể bấm <strong>"+ Thêm mới"</strong> hoặc hướng dẫn thành viên bấm <strong>"Đăng ký thành viên mới"</strong> trên thanh menu.
+          </p>
+          <button class="btn btn-primary btn-sm" onclick="SettingsModule.openAddMemberModal()">
+            <i class="fas fa-user-plus"></i> Thêm thành viên đầu tiên
+          </button>
+        </div>
+      `;
+      return;
+    }
+
     container.innerHTML = members.map((m, idx) => `
       <div class="card" style="padding: 0.85rem 1rem; margin-bottom: 0.6rem; display: flex; align-items: center; justify-content: space-between; background: var(--bg-input);">
         <div class="flex items-center gap-3">
@@ -93,11 +122,9 @@ const SettingsModule = {
           <button class="btn btn-secondary btn-sm" onclick="SettingsModule.openEditMemberModal('${m.id}')" title="Sửa thông tin">
             <i class="fas fa-edit"></i>
           </button>
-          ${m.role !== 'admin' ? `
-            <button class="btn btn-danger btn-sm" onclick="SettingsModule.deleteMember('${m.id}')" title="Xóa thành viên">
-              <i class="fas fa-trash"></i>
-            </button>
-          ` : ''}
+          <button class="btn btn-outline-danger btn-sm" onclick="SettingsModule.deleteMember('${m.id}')" title="Xóa thành viên">
+            <i class="fas fa-trash"></i>
+          </button>
         </div>
       </div>
     `).join('');
@@ -168,6 +195,8 @@ const SettingsModule = {
     App.showToast(`Đã thêm thành viên ${name} thành công!`, "success");
     this.renderMembersAdmin();
     App.renderUserRoleSelector();
+    if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 
   openEditMemberModal(memberId) {
@@ -231,16 +260,24 @@ const SettingsModule = {
     App.showToast("Đã cập nhật thông tin thành viên thành công!", "success");
     this.renderMembersAdmin();
     App.renderUserRoleSelector();
+    if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 
   deleteMember(memberId) {
     if (!confirm("Bạn có chắc chắn muốn xóa thành viên này khỏi CLB?")) return;
     const data = AppStorage.loadData();
     data.members = (data.members || []).filter(m => m.id !== memberId);
+    // Xóa các lượt đóng quỹ liên quan của thành viên này
+    if (data.monthlyContributions) {
+      data.monthlyContributions = data.monthlyContributions.filter(d => d.memberId !== memberId);
+    }
     AppStorage.saveData(data);
     this.renderMembersAdmin();
     App.renderUserRoleSelector();
-    App.showToast("Đã xóa thành viên!", "info");
+    if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+    App.showToast("Đã xóa thành viên khỏi danh sách CLB!", "info");
   },
 
   // Public User-Facing Member Registration
@@ -305,6 +342,7 @@ const SettingsModule = {
     this.renderPublicMemberRoster();
     App.renderUserRoleSelector();
     App.refreshDashboardStats();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 
   renderPublicMemberRoster() {
@@ -315,6 +353,11 @@ const SettingsModule = {
 
     if (badge) badge.innerText = `${members.length} thành viên`;
     if (!container) return;
+
+    if (members.length === 0) {
+      container.innerHTML = `<span class="text-muted" style="font-size: 0.85rem; font-style: italic;">Chưa có thành viên nào. Hãy là người đầu tiên đăng ký gia nhập CLB!</span>`;
+      return;
+    }
 
     container.innerHTML = members.map(m => `
       <div class="badge badge-neutral" style="padding: 0.35rem 0.6rem; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem;">

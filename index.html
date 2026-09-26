@@ -100,9 +100,11 @@
             </select>
           </div>
         </div>
-        <button class="btn btn-secondary btn-sm w-full" style="margin-top: 0.75rem; justify-content: center;" onclick="App.logout()">
-          <i class="fas fa-sign-out-alt"></i> Đăng xuất
-        </button>
+        <div id="sidebar-auth-btn-wrapper">
+          <button class="btn btn-primary btn-sm w-full" style="margin-top: 0.75rem; justify-content: center;" onclick="App.showAuthModal('login')">
+            <i class="fas fa-sign-in-alt"></i> Đăng nhập / Đăng ký
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -129,16 +131,18 @@
             <i id="theme-toggle-icon" class="fas fa-sun"></i>
           </button>
 
-          <!-- Current User Profile & Logout in Header -->
-          <div class="flex items-center gap-3" style="border-left: 1px solid var(--border-color); padding-left: 0.75rem;">
-            <img id="header-user-avatar" class="avatar" src="" alt="Avatar">
+          <!-- Current User Profile & Login/Logout in Header -->
+          <div class="flex items-center gap-2 sm:gap-3" id="header-user-section" style="border-left: 1px solid var(--border-color); padding-left: 0.75rem;">
+            <img id="header-user-avatar" class="avatar" src="https://ui-avatars.com/api/?name=Khach&background=64748b&color=fff" alt="Avatar">
             <div class="hidden sm:block" style="line-height: 1.2;">
-              <div id="header-user-name" class="font-bold" style="font-size: 0.88rem;">Quản trị viên CLB</div>
-              <span id="header-user-role" class="badge badge-warning" style="font-size: 0.68rem; margin-top: 0.15rem;">Admin</span>
+              <div id="header-user-name" class="font-bold" style="font-size: 0.88rem;">Khách vãng lai</div>
+              <span id="header-user-role" class="badge badge-neutral" style="font-size: 0.68rem; margin-top: 0.15rem;">Chưa đăng nhập</span>
             </div>
-            <button class="btn btn-secondary btn-sm" onclick="App.logout()" title="Đăng xuất tài khoản" style="padding: 0.4rem 0.65rem;">
-              <i class="fas fa-sign-out-alt"></i> <span class="hidden md:inline">Đăng xuất</span>
-            </button>
+            <div id="header-auth-btn-wrapper">
+              <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login')" title="Đăng nhập tài khoản" style="padding: 0.4rem 0.65rem;">
+                <i class="fas fa-sign-in-alt"></i> <span class="hidden md:inline">Đăng nhập</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -191,7 +195,7 @@
               </div>
               <div class="stat-info">
                 <span class="stat-label">Đã đóng quỹ tháng 9</span>
-                <span class="stat-value" id="dash-paid-members">0/0</span>
+                <span class="stat-value" id="dash-paid-members">0/0 thành viên</span>
                 <span class="stat-sub text-warning" id="dash-pending-dues">0 chờ duyệt</span>
               </div>
             </div>
@@ -202,8 +206,8 @@
               </div>
               <div class="stat-info">
                 <span class="stat-label">Buổi đánh tiếp theo</span>
-                <span class="stat-value" id="dash-next-session-title" style="font-size: 1.15rem;">Đang tải...</span>
-                <span class="stat-sub text-primary" id="dash-next-session-time">Khung giờ</span>
+                <span class="stat-value" id="dash-next-session-title" style="font-size: 1.15rem;">Chưa có lịch</span>
+                <span class="stat-sub text-primary" id="dash-next-session-time">Tạo lịch mới trong tab Lịch sân</span>
               </div>
             </div>
 
@@ -213,7 +217,7 @@
               </div>
               <div class="stat-info">
                 <span class="stat-label">Tổng thành viên</span>
-                <span class="stat-value" id="dash-total-members">10 người</span>
+                <span class="stat-value" id="dash-total-members">0 người</span>
                 <span class="stat-sub text-secondary">Cố định & vãng lai</span>
               </div>
             </div>
@@ -332,13 +336,13 @@
             <div class="calendar-grid-wrapper">
               <!-- Weekday Headers -->
               <div class="calendar-weekdays-grid">
-                <div class="calendar-weekday-cell">Thứ 2</div>
-                <div class="calendar-weekday-cell">Thứ 3</div>
-                <div class="calendar-weekday-cell">Thứ 4</div>
-                <div class="calendar-weekday-cell">Thứ 5</div>
-                <div class="calendar-weekday-cell">Thứ 6</div>
-                <div class="calendar-weekday-cell is-weekend">Thứ 7</div>
-                <div class="calendar-weekday-cell is-weekend">Chủ nhật</div>
+                <div class="calendar-weekday-cell"><span class="desktop-name">Thứ 2</span><span class="mobile-name">T2</span></div>
+                <div class="calendar-weekday-cell"><span class="desktop-name">Thứ 3</span><span class="mobile-name">T3</span></div>
+                <div class="calendar-weekday-cell"><span class="desktop-name">Thứ 4</span><span class="mobile-name">T4</span></div>
+                <div class="calendar-weekday-cell"><span class="desktop-name">Thứ 5</span><span class="mobile-name">T5</span></div>
+                <div class="calendar-weekday-cell"><span class="desktop-name">Thứ 6</span><span class="mobile-name">T6</span></div>
+                <div class="calendar-weekday-cell is-weekend"><span class="desktop-name">Thứ 7</span><span class="mobile-name">T7</span></div>
+                <div class="calendar-weekday-cell is-weekend"><span class="desktop-name">Chủ nhật</span><span class="mobile-name">CN</span></div>
               </div>
 
               <!-- 7x5/7x6 Day Cells Grid -->
@@ -851,8 +855,11 @@
   </nav>
 
   <!-- Auth Modal & Welcome Overlay (Login / Register) -->
-  <div class="auth-overlay" id="auth-modal-overlay">
-    <div class="auth-card">
+  <div class="auth-overlay" id="auth-modal-overlay" onclick="if(event.target.id === 'auth-modal-overlay') App.closeAuthModal()">
+    <div class="auth-card" style="position: relative;">
+      <button type="button" class="auth-close-btn" onclick="App.closeAuthModal()" aria-label="Đóng cửa sổ" title="Đóng cửa sổ">
+        <i class="fas fa-times"></i>
+      </button>
       <div class="auth-header" style="padding: 1.25rem 1.5rem 0.75rem;">
         <div class="flex items-center justify-center gap-2" style="margin-bottom: 0.25rem;">
           <div class="stat-icon" style="width: 32px; height: 32px; font-size: 1rem; background: var(--primary); color: #fff; border-radius: var(--radius-sm);">
