@@ -1579,8 +1579,12 @@ const ScheduleModule = {
     if (!mode || !window.VoteScheduler) return;
     if (info.autoVoteOpen && info.autoVoteOpen.enabled) mode.value = 'scheduled';
     this.onVoteOpenModeChange();
-    const dateInput = document.getElementById('session-date');
-    if (dateInput) dateInput.addEventListener('change', () => this.onVoteOpenModeChange(true));
+    ['session-date', 'session-start'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('change', () => this.onVoteOpenModeChange(true));
+    });
+    const hint = document.getElementById('session-vote-open-rule');
+    if (hint) hint.textContent = 'Quy tắc của CLB: ' + VoteScheduler.describeRule(info);
   },
 
   onVoteOpenModeChange(dateChanged = false) {
@@ -1593,8 +1597,9 @@ const ScheduleModule = {
     if (scheduled && (!input.value || dateChanged)) {
       const info = (AppStorage.loadData().clubInfo) || {};
       const dateVal = document.getElementById('session-date')?.value || '';
-      const cfg = Object.assign({ daysBefore: 5, time: '08:00' }, info.autoVoteOpen || {}, { enabled: true });
-      input.value = VoteScheduler.defaultOpenAt(dateVal, { autoVoteOpen: cfg }) || VoteScheduler.toLocalInput(Date.now() + 60 * 60 * 1000);
+      const cfg = Object.assign({ mode: 'daysBefore', daysBefore: 5, time: '08:00' }, info.autoVoteOpen || {}, { enabled: true });
+      const startVal = document.getElementById('session-start')?.value || '';
+      input.value = VoteScheduler.defaultOpenAt(dateVal, { autoVoteOpen: cfg }, startVal) || VoteScheduler.toLocalInput(Date.now() + 60 * 60 * 1000);
     }
   },
 
@@ -1824,7 +1829,7 @@ const ScheduleModule = {
           <input type="datetime-local" id="session-vote-open-at" class="form-control" style="margin-top: 0.5rem; display: none;">
           ${window.VoteScheduler ? VoteScheduler.renderEmailCheckbox('session-email-notify', null, AppStorage.loadData().clubInfo) : ''}
           <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.35rem; display: block;">
-            Đến giờ hẹn, bình chọn tự mở và thành viên nhận thông báo. Mặc định theo Cài đặt CLB.
+            Đến giờ hẹn, bình chọn tự mở và thành viên nhận thông báo. <span id="session-vote-open-rule"></span>
           </span>
         </div>
 

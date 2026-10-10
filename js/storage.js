@@ -260,9 +260,25 @@ const AppStorage = {
     data.deletedUserIds = [];
     this.sanitizeProductionData(data);
     this.reconcileUsersAndMembers(data);
+    this._applyDuesPrivacy(data);
     data.currentUser = null;
     this._viewJson = JSON.stringify(data);
     return this._viewJson;
+  },
+
+  // Quỹ tháng: chỉ Admin/Thủ quỹ thấy của mọi người; thành viên khác chỉ thấy phiếu của mình,
+  // dòng thu quỹ của người khác trong sổ thu chi bị ẩn tên (máy chủ cũng lọc như vậy).
+  _applyDuesPrivacy(data) {
+    const s = this._readSession();
+    if (s && (s.role === 'admin' || s.role === 'treasurer')) return;
+    const myMember = s && s.memberId;
+    data.monthlyContributions = (data.monthlyContributions || []).filter((d) => myMember && d.memberId === myMember);
+    data.transactions = (data.transactions || []).map((t) => {
+      if (!t || !t.dueId || (myMember && String(t.dueId).endsWith('_' + myMember))) return t;
+      const c = Object.assign({}, t, { title: 'Thu quỹ tháng' });
+      delete c.dueId; delete c.note; delete c.createdBy;
+      return c;
+    });
   },
 
   _getViewObj() {

@@ -14,7 +14,12 @@ const FundModule = {
 
   renderFundDashboard() {
     const data = AppStorage.loadData();
-    const members = (data.members || []).filter(m => m.type === 'fixed');
+    let members = (data.members || []).filter(m => m.type === 'fixed');
+    // Thành viên thường (không phải Admin/Thủ quỹ) chỉ xem tình trạng quỹ của chính mình
+    if (!AppStorage.isAdmin()) {
+      const me = AppStorage.getCurrentUser();
+      members = members.filter(m => me && (m.id === me.memberId || (me.username && m.username === me.username)));
+    }
     const dues = data.monthlyContributions || [];
     const defaultMonthlyFee = this.getClubFee(data);
     const currentUser = AppStorage.getCurrentUser();

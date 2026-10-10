@@ -937,10 +937,34 @@
                       <span class="slider"></span>
                     </label>
                   </div>
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem;">
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-top: 0.75rem;">
                     <div>
+                      <label class="form-label" style="font-size: 0.8rem;">Kiểu lịch mở</label>
+                      <select id="set-auto-vote-mode" class="form-select" onchange="SettingsModule.onAutoVoteModeChange()">
+                        <option value="daysBefore">Trước buổi đánh N ngày</option>
+                        <option value="weekday">Thứ cố định trong tuần</option>
+                        <option value="monthday">Ngày cố định trong tháng</option>
+                      </select>
+                    </div>
+                    <div id="set-auto-vote-weekday-box" style="display: none;">
+                      <label class="form-label" style="font-size: 0.8rem;">Mở vào thứ</label>
+                      <select id="set-auto-vote-weekday" class="form-select" onchange="SettingsModule.onAutoVoteModeChange()">
+                        <option value="1">Thứ 2</option>
+                        <option value="2">Thứ 3</option>
+                        <option value="3">Thứ 4</option>
+                        <option value="4">Thứ 5</option>
+                        <option value="5">Thứ 6</option>
+                        <option value="6">Thứ 7</option>
+                        <option value="0">Chủ nhật</option>
+                      </select>
+                    </div>
+                    <div id="set-auto-vote-monthday-box" style="display: none;">
+                      <label class="form-label" style="font-size: 0.8rem;">Mở vào ngày (trong tháng)</label>
+                      <select id="set-auto-vote-monthday" class="form-select" onchange="SettingsModule.onAutoVoteModeChange()"></select>
+                    </div>
+                    <div id="set-auto-vote-days-box">
                       <label class="form-label" style="font-size: 0.8rem;">Mở trước giờ đánh</label>
-                      <select id="set-auto-vote-days" class="form-select">
+                      <select id="set-auto-vote-days" class="form-select" onchange="SettingsModule.onAutoVoteModeChange()">
                         <option value="2">2 ngày</option>
                         <option value="3">3 ngày</option>
                         <option value="4">4 ngày</option>
@@ -950,9 +974,10 @@
                     </div>
                     <div>
                       <label class="form-label" style="font-size: 0.8rem;">Lúc (giờ Việt Nam)</label>
-                      <input type="time" id="set-auto-vote-time" class="form-control" value="08:00">
+                      <input type="time" id="set-auto-vote-time" class="form-control" value="08:00" onchange="SettingsModule.onAutoVoteModeChange()">
                     </div>
                   </div>
+                  <span id="set-auto-vote-desc" class="text-secondary" style="font-size: 0.75rem; margin-top: 0.35rem; display: block;"></span>
                 </div>
 
                 <!-- Email Notification Setting -->

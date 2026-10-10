@@ -177,7 +177,7 @@ const MembersModule = {
 
               ${isFixed ? `
                 <div class="flex items-center justify-between" style="border-top: 1px dashed var(--border-color); padding-top: 0.35rem; margin-top: 0.1rem;">
-                  <span class="text-secondary"><i class="fas fa-coins text-warning"></i> Quỹ tháng 9:</span>
+                  <span class="text-secondary"><i class="fas fa-coins text-warning"></i> Quỹ tháng ${Number(currentMonth.slice(5))}:</span>
                   ${(isAdmin || isSelf) ? `
                     <span class="badge ${isPaidDue ? 'badge-paid' : isPendingDue ? 'badge-info' : 'badge-danger'}" style="font-size: 0.68rem;">
                       ${isPaidDue ? '<i class="fas fa-check-circle"></i> Đã đóng quỹ' : isPendingDue ? '<i class="fas fa-clock"></i> Chờ duyệt' : '<i class="fas fa-exclamation-circle"></i> Chưa đóng quỹ'}

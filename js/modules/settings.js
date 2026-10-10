@@ -30,6 +30,11 @@ const SettingsModule = {
       if (autoOpenToggle) autoOpenToggle.checked = !!autoOpen.enabled;
       this.setValue('set-auto-vote-days', autoOpen.daysBefore || 5);
       this.setValue('set-auto-vote-time', autoOpen.time || '08:00');
+      this.fillMonthDayOptions();
+      this.setValue('set-auto-vote-mode', autoOpen.mode || 'daysBefore');
+      this.setValue('set-auto-vote-weekday', autoOpen.weekday !== undefined ? autoOpen.weekday : 1);
+      this.setValue('set-auto-vote-monthday', autoOpen.monthDay || 1);
+      this.onAutoVoteModeChange();
       const mail = info.emailNotify || {};
       const setCheck = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
       setCheck('set-email-enabled', mail.enabled);
@@ -120,6 +125,37 @@ const SettingsModule = {
     App.showToast(res.message || (res.status === 'ok' ? 'Đã gửi email thử.' : 'Không gửi được email thử.'), res.status === 'ok' ? 'success' : 'warning');
   },
 
+  fillMonthDayOptions() {
+    const sel = document.getElementById('set-auto-vote-monthday');
+    if (!sel || sel.options.length) return;
+    for (let d = 1; d <= 31; d++) {
+      const opt = document.createElement('option');
+      opt.value = String(d);
+      opt.textContent = d >= 29 ? `Ngày ${d} (tháng thiếu ngày -> ngày cuối tháng)` : `Ngày ${d}`;
+      sel.appendChild(opt);
+    }
+  },
+
+  // Hiện ô phù hợp với kiểu lịch mở bình chọn đã chọn
+  onAutoVoteModeChange() {
+    const mode = document.getElementById('set-auto-vote-mode')?.value || 'daysBefore';
+    const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+    show('set-auto-vote-days-box', mode === 'daysBefore');
+    show('set-auto-vote-weekday-box', mode === 'weekday');
+    show('set-auto-vote-monthday-box', mode === 'monthday');
+    const desc = document.getElementById('set-auto-vote-desc');
+    if (desc && window.VoteScheduler) {
+      const cfg = {
+        enabled: true, mode,
+        daysBefore: parseInt(document.getElementById('set-auto-vote-days')?.value) || 5,
+        weekday: parseInt(document.getElementById('set-auto-vote-weekday')?.value) || 0,
+        monthDay: parseInt(document.getElementById('set-auto-vote-monthday')?.value) || 1,
+        time: document.getElementById('set-auto-vote-time')?.value || '08:00'
+      };
+      desc.textContent = 'Quy tắc: ' + VoteScheduler.describeRule({ autoVoteOpen: cfg }) + '. Áp dụng làm giờ mở mặc định khi tạo buổi đánh mới.';
+    }
+  },
+
   setValue(id, val) {
     const el = document.getElementById(id);
     if (el && val !== undefined) el.value = val;
@@ -150,7 +186,10 @@ const SettingsModule = {
     if (document.getElementById('set-auto-vote-open')) {
       data.clubInfo.autoVoteOpen = {
         enabled: document.getElementById('set-auto-vote-open').checked,
+        mode: ['daysBefore', 'weekday', 'monthday'].includes(document.getElementById('set-auto-vote-mode')?.value) ? document.getElementById('set-auto-vote-mode').value : 'daysBefore',
         daysBefore: parseInt(document.getElementById('set-auto-vote-days')?.value) || 5,
+        weekday: Math.min(6, Math.max(0, parseInt(document.getElementById('set-auto-vote-weekday')?.value) || 0)),
+        monthDay: Math.min(31, Math.max(1, parseInt(document.getElementById('set-auto-vote-monthday')?.value) || 1)),
         time: document.getElementById('set-auto-vote-time')?.value || '08:00'
       };
     }

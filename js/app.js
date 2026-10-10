@@ -603,13 +603,20 @@ const App = {
     }
 
     const dashDues = document.getElementById('dash-paid-members');
-    if (dashDues) {
-      const totalFixedCount = fixedMembers.length > 0 ? fixedMembers.length : members.length;
-      dashDues.innerText = `${monthDuesPaid.length}/${totalFixedCount} thành viên`;
-    }
-
     const dashPending = document.getElementById('dash-pending-dues');
-    if (dashPending) dashPending.innerText = `${pendingDues.length} chờ duyệt`;
+    if (AppStorage.isAdmin()) {
+      if (dashDues) {
+        const totalFixedCount = fixedMembers.length > 0 ? fixedMembers.length : members.length;
+        dashDues.innerText = `${monthDuesPaid.length}/${totalFixedCount} thành viên`;
+      }
+      if (dashPending) dashPending.innerText = `${pendingDues.length} chờ duyệt`;
+    } else {
+      // Thành viên thường: chỉ thấy tình trạng của chính mình
+      const me = AppStorage.getCurrentUser();
+      const mine = me ? dues.find(d => d.memberId === me.memberId && d.month === currentMonth) : null;
+      if (dashDues) dashDues.innerText = !me ? 'Đăng nhập để xem' : mine && mine.status === 'paid' ? 'Bạn đã đóng' : mine && mine.status === 'pending' ? 'Bạn: chờ duyệt' : (me.type === 'fixed' ? 'Bạn chưa đóng' : 'Không áp dụng');
+      if (dashPending) dashPending.innerText = 'Chỉ hiển thị quỹ của bạn';
+    }
 
     const dashNext = document.getElementById('dash-next-session-title');
     const dashNextTime = document.getElementById('dash-next-session-time');

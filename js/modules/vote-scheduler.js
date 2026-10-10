@@ -41,16 +41,73 @@ const VoteScheduler = {
     return `${v.slice(11, 16)} ngày ${v.slice(8, 10)}/${v.slice(5, 7)}`;
   },
 
-  // Thời điểm mở vote mặc định theo cài đặt CLB: trước giờ đánh N ngày, lúc HH:mm
-  defaultOpenAt(dateStr, club) {
+  WEEKDAY_LABELS: ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'],
+
+  // Ngày "YYYY-MM-DD" <-> {y, m, d} (tính theo lịch, không phụ thuộc múi giờ thiết bị)
+  _ymd(dateStr) {
+    const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+  },
+  _fmtYmd(y, m, d) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${y}-${p(m)}-${p(d)}`;
+  },
+  _daysInMonth(y, m) {
+    return new Date(Date.UTC(y, m, 0)).getUTCDate();
+  },
+
+  // Thời điểm mở vote mặc định theo cài đặt CLB (clubInfo.autoVoteOpen):
+  //  - mode 'daysBefore': trước ngày đánh N ngày, lúc HH:mm
+  //  - mode 'weekday'   : vào THỨ cố định trong tuần (gần nhất trước giờ đánh), lúc HH:mm
+  //  - mode 'monthday'  : vào NGÀY cố định trong tháng (gần nhất trước giờ đánh; tháng thiếu ngày -> ngày cuối tháng), lúc HH:mm
+  // startTime: giờ bắt đầu buổi đánh, để bảo đảm giờ mở luôn trước giờ đánh.
+  defaultOpenAt(dateStr, club, startTime) {
     const cfg = (club && club.autoVoteOpen) || {};
-    if (!cfg.enabled || !dateStr) return '';
-    const start = this.parseLocal(`${dateStr}T00:00`);
-    if (isNaN(start)) return '';
-    const days = Math.max(0, Number(cfg.daysBefore) || 0);
+    const day = this._ymd(dateStr);
+    if (!cfg.enabled || !day) return '';
     const time = /^\d{2}:\d{2}$/.test(cfg.time || '') ? cfg.time : '08:00';
-    const openDay = this.toLocalInput(start - days * 24 * 60 * 60 * 1000).slice(0, 10);
-    return `${openDay}T${time}`;
+    const startMs = this.parseLocal(`${dateStr}T${/^\d{2}:\d{2}/.test(startTime || '') ? startTime.slice(0, 5) : '23:59'}`);
+    const before = (ymdStr) => this.parseLocal(`${ymdStr}T${time}`) < startMs;
+    const mode = cfg.mode || 'daysBefore';
+
+    if (mode === 'weekday') {
+      const target = Math.min(6, Math.max(0, Number(cfg.weekday) || 0));
+      const base = Date.UTC(day.y, day.m - 1, day.d);
+      for (let back = 0; back <= 14; back++) {
+        const dt = new Date(base - back * 86400000);
+        if (dt.getUTCDay() !== target) continue;
+        const cand = this._fmtYmd(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+        if (before(cand)) return `${cand}T${time}`;
+      }
+      return '';
+    }
+
+    if (mode === 'monthday') {
+      const want = Math.min(31, Math.max(1, Number(cfg.monthDay) || 1));
+      let y = day.y, m = day.m;
+      for (let i = 0; i < 3; i++) {
+        const d = Math.min(want, this._daysInMonth(y, m));
+        const cand = this._fmtYmd(y, m, d);
+        if (cand <= dateStr && before(cand)) return `${cand}T${time}`;
+        m -= 1;
+        if (m === 0) { m = 12; y -= 1; }
+      }
+      return '';
+    }
+
+    const days = Math.max(0, Number(cfg.daysBefore) || 0);
+    const base = new Date(Date.UTC(day.y, day.m - 1, day.d) - days * 86400000);
+    return `${this._fmtYmd(base.getUTCFullYear(), base.getUTCMonth() + 1, base.getUTCDate())}T${time}`;
+  },
+
+  // Mô tả quy tắc tự động mở bình chọn (hiển thị cho Ban quản trị)
+  describeRule(club) {
+    const cfg = (club && club.autoVoteOpen) || {};
+    if (!cfg.enabled) return 'Chưa bật tự động mở bình chọn';
+    const time = cfg.time || '08:00';
+    if (cfg.mode === 'weekday') return `${this.WEEKDAY_LABELS[Number(cfg.weekday) || 0]} hằng tuần lúc ${time} (gần nhất trước buổi đánh)`;
+    if (cfg.mode === 'monthday') return `Ngày ${Number(cfg.monthDay) || 1} hằng tháng lúc ${time} (gần nhất trước buổi đánh)`;
+    return `Trước buổi đánh ${Number(cfg.daysBefore) || 0} ngày, lúc ${time}`;
   },
 
   emailEnabled(club) {
@@ -129,7 +186,7 @@ const VoteScheduler = {
     const session = (data.sessions || []).find((s) => s.id === sessionId);
     if (!session) return;
     const st = this.getOpenState(session);
-    const value = st.scheduled ? session.voteOpenAt : (this.defaultOpenAt(session.date, data.clubInfo) || this.toLocalInput(Date.now() + 60 * 60 * 1000));
+    const value = st.scheduled ? session.voteOpenAt : (this.defaultOpenAt(session.date, data.clubInfo, session.startTime) || this.toLocalInput(Date.now() + 60 * 60 * 1000));
     const body = `
       <form onsubmit="VoteScheduler.saveSchedule(event, ${Safe.js(session.id)})">
         <p class="text-secondary" style="font-size: 0.85rem; margin-bottom: 1rem;">
