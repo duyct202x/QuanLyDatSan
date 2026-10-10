@@ -22,8 +22,8 @@ const SettingsModule = {
       this.setValue('set-court-address', info.address || '');
       this.setValue('set-club-banner-subtitle', info.bannerSubtitle || '');
       this.setValue('set-court-map-url', info.mapUrl || '');
-      this.setValue('set-monthly-fee', info.monthlyFee || info.monthlyFundFee || 20000);
-      this.setValue('set-guest-fee', info.guestFee || 60000);
+      this.setValue('set-monthly-fee', info.monthlyFee || info.monthlyFundFee || '');
+      this.setValue('set-guest-fee', info.guestFee || '');
       this.setValue('set-lock-hours', info.voteLockHours || 48);
       const autoOpen = info.autoVoteOpen || {};
       const autoOpenToggle = document.getElementById('set-auto-vote-open');
@@ -143,9 +143,9 @@ const SettingsModule = {
     data.clubInfo.bannerSubtitle = document.getElementById('set-club-banner-subtitle')?.value.trim() || '';
     const mapUrlInput = document.getElementById('set-court-map-url')?.value.trim();
     data.clubInfo.mapUrl = mapUrlInput || (data.clubInfo.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(data.clubInfo.address)}` : '');
-    data.clubInfo.monthlyFee = parseInt(document.getElementById('set-monthly-fee').value) || 20000;
+    data.clubInfo.monthlyFee = parseInt(document.getElementById('set-monthly-fee').value) || 0;
     data.clubInfo.monthlyFundFee = data.clubInfo.monthlyFee;
-    data.clubInfo.guestFee = parseInt(document.getElementById('set-guest-fee').value) || 60000;
+    data.clubInfo.guestFee = parseInt(document.getElementById('set-guest-fee').value) || 0;
     data.clubInfo.voteLockHours = parseInt(document.getElementById('set-lock-hours').value) || 48;
     if (document.getElementById('set-auto-vote-open')) {
       data.clubInfo.autoVoteOpen = {

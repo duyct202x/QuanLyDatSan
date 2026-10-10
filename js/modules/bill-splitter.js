@@ -66,15 +66,20 @@ const BillSplitterModule = {
       this.setInput('bill-split-mode', saved.mode || 'guests_only');
       this.setInput('bill-court-fee', saved.courtFee ?? 0);
       this.setInput('bill-shuttle-tubes', saved.shuttleTubes ?? 0);
-      this.setInput('bill-shuttle-price', saved.shuttlePrice ?? 230000);
+      this.setInput('bill-shuttle-price', saved.shuttlePrice ?? this.inventoryTubePrice(data));
       this.setInput('bill-drink-fee', saved.drinkFee ?? 0);
       this.setInput('bill-other-fee', saved.otherFee ?? 0);
       this.setInput('bill-guest-fee', saved.guestFee ?? (Number(data.clubInfo?.guestFee) || 0));
       this.setInput('bill-player-count', saved.extraGuests ?? 0);
     } else {
       this.setInput('bill-split-mode', session && session.sessionType === 'guest' ? 'all' : 'guests_only');
-      this.setInput('bill-court-fee', session ? (session.courtPrice || 0) : 0);
-      this.setInput('bill-guest-fee', Number(data.clubInfo?.guestFee) || 0);
+      // Buổi chưa có số liệu: chỉ lấy dữ liệu đã nhập (giá sân của buổi, giá ống trong Kho cầu), còn lại để trống
+      this.setInput('bill-court-fee', session && Number(session.courtPrice) ? Number(session.courtPrice) : '');
+      this.setInput('bill-shuttle-tubes', '');
+      this.setInput('bill-shuttle-price', this.inventoryTubePrice(data));
+      this.setInput('bill-drink-fee', '');
+      this.setInput('bill-other-fee', '');
+      this.setInput('bill-guest-fee', Number(data.clubInfo?.guestFee) || '');
       this.setInput('bill-player-count', 0);
     }
 
@@ -118,7 +123,7 @@ const BillSplitterModule = {
 
     const courtFee = this.num('bill-court-fee');
     const shuttleTubes = this.num('bill-shuttle-tubes');
-    const shuttlePrice = this.num('bill-shuttle-price', 230000);
+    const shuttlePrice = this.num('bill-shuttle-price', 0);
     const drinkFee = this.num('bill-drink-fee');
     const otherFee = this.num('bill-other-fee');
     const guestFee = this.num('bill-guest-fee', Number(data.clubInfo?.guestFee) || 0);
@@ -284,6 +289,12 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
   },
 
   // Lấy (và tạo nếu chưa có) cấu hình chia tiền của buổi đánh
+  // Giá 1 ống cầu lấy từ Kho cầu do người dùng nhập (không dùng giá mẫu); chưa có thì để trống
+  inventoryTubePrice(data) {
+    const item = ((data && data.inventory) || []).find((i) => Number(i.pricePerTube) > 0);
+    return item ? Number(item.pricePerTube) : '';
+  },
+
   ensureBillSplit(session) {
     if (!session.billSplit) session.billSplit = { excluded: [], payments: {} };
     if (!Array.isArray(session.billSplit.excluded)) session.billSplit.excluded = [];

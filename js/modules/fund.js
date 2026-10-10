@@ -2,12 +2,14 @@
 
 const FundModule = {
   currentFilter: 'all',
-  currentMonth: '2026-09',
+  get currentMonth() {
+    return AppStorage.currentMonth();
+  },
 
   getClubFee(data) {
     if (!data) data = AppStorage.loadData();
     const info = data.clubInfo || {};
-    return info.monthlyFee || info.monthlyFundFee || 20000;
+    return Number(info.monthlyFee || info.monthlyFundFee) || 0;
   },
 
   renderFundDashboard() {
@@ -23,8 +25,8 @@ const FundModule = {
     // Current month dues data (chỉ lấy của các thành viên cố định thực sự tồn tại)
     const monthDues = dues.filter(d => d.month === this.currentMonth && fixedMemberIds.has(d.memberId));
     
-    // Ensure all fixed members have a dues record for this month
-    members.forEach(m => {
+    // Phiếu quỹ dự kiến cho thành viên cố định chưa có phiếu tháng này (chỉ khi CLB đã cài mức quỹ)
+    if (defaultMonthlyFee > 0) members.forEach(m => {
       let existingDue = monthDues.find(d => d.memberId === m.id);
       if (!existingDue) {
         existingDue = {
@@ -464,7 +466,11 @@ const FundModule = {
     const defaultMonthlyFee = this.getClubFee(data);
     const member = (data.members || []).find(m => m.id === memberId) || data.currentUser || { name: 'Thành viên', id: memberId };
     const info = data.clubInfo || {};
-    const bank = info.bank || { bankId: '970422', bankName: 'MB Bank', accountNo: '0988776655', accountName: 'NGUYEN VAN ADMIN' };
+    const bank = info.bank && info.bank.bankId && info.bank.accountNo ? info.bank : null;
+    if (!bank) {
+      App.showToast('CLB chưa cấu hình tài khoản ngân hàng nhận quỹ. Vui lòng liên hệ Ban quản trị.', 'warning');
+      return;
+    }
     
     // Tìm due của thành viên để lấy chính xác số tiền được Admin cài đặt
     const dues = data.monthlyContributions || [];
@@ -601,8 +607,7 @@ const FundModule = {
     const note = document.getElementById('bill-note')?.value.trim() || 'Đã chuyển khoản';
     const previewImg = document.getElementById('bill-preview-img');
     const billImage = (previewImg && previewImg.src && previewImg.src.startsWith('data:')) ? 
-      previewImg.src : 
-      'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=400&auto=format&fit=crop&q=80';
+      previewImg.src : null;
 
     if (!data.monthlyContributions) data.monthlyContributions = [];
 
@@ -862,7 +867,7 @@ const FundModule = {
     const members = (data.members || []).filter(m => m.type === 'fixed');
     const dues = data.monthlyContributions || [];
     const info = data.clubInfo || {};
-    const bank = info.bank || { bankId: '970422', bankName: 'MB Bank', accountNo: '0988776655', accountName: 'NGUYEN VAN ADMIN' };
+    const bank = info.bank && info.bank.accountNo ? info.bank : { bankName: '(chưa cấu hình)', accountNo: '(chưa cấu hình)', accountName: '(chưa cấu hình)' };
     const defaultMonthlyFee = this.getClubFee(data);
 
     const unpaidMembers = members.filter(m => {

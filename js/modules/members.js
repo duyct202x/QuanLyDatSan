@@ -18,7 +18,7 @@ const MembersModule = {
     const data = AppStorage.loadData();
     const members = data.members || [];
     const dues = data.monthlyContributions || [];
-    const currentMonth = "2026-09";
+    const currentMonth = AppStorage.currentMonth();
     const isAdmin = AppStorage.isAdmin();
 
     // 1. Tính toán số liệu thống kê (KPIs)
@@ -449,15 +449,16 @@ const MembersModule = {
     }
 
     // Nếu là thành viên cố định -> Tạo phiếu thu quỹ tháng hiện tại
-    if (type === 'fixed') {
-      const currentMonth = "2026-09";
+    const memberFee = Number(data.clubInfo.monthlyFee || data.clubInfo.monthlyFundFee) || 0;
+    if (type === 'fixed' && memberFee > 0) {
+      const currentMonth = AppStorage.currentMonth();
       if (!data.monthlyContributions) data.monthlyContributions = [];
       if (!data.monthlyContributions.some(d => d.memberId === newMemId && d.month === currentMonth)) {
         data.monthlyContributions.push({
           id: `due_${currentMonth}_${newMemId}`,
           month: currentMonth,
           memberId: newMemId,
-          amount: data.clubInfo.monthlyFee || data.clubInfo.monthlyFundFee || 20000,
+          amount: memberFee,
           status: 'unpaid',
           paidAt: null,
           method: null,

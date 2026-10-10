@@ -46,6 +46,11 @@ const AppStorage = {
     return localStorage.getItem(ACTIVE_SHEET_KEY) || 'CSDL_VanHanh_Prod';
   },
 
+  // Tháng hiện tại "YYYY-MM" theo giờ Việt Nam
+  currentMonth() {
+    return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  },
+
   // Không gửi lên Cloud (môi trường kiểm thử hoặc chưa cấu hình URL): op áp thẳng vào kho cục bộ
   isLocalOnly() {
     return this.isTestEnvironment() || !this.googleScriptUrl;
@@ -317,11 +322,8 @@ const AppStorage = {
         }
       });
       data.users = Array.from(userMap.values());
-      if (!data.users.some(u => u.username === 'admin')) {
-        data.users.unshift(JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.users[0])));
-      }
     } else {
-      data.users = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.users));
+      data.users = [];
     }
 
     // Lọc members: Giữ lại toàn bộ thành viên hợp lệ, khử trùng lặp và loại bỏ thành viên kiểm thử rác hoặc đã bị xóa
@@ -360,11 +362,8 @@ const AppStorage = {
         }
       });
       data.members = Array.from(memberMap.values());
-      if (!data.members.some(m => m.id === 'mem_admin' || m.username === 'admin')) {
-        data.members.unshift(JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.members[0])));
-      }
     } else {
-      data.members = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.members));
+      data.members = [];
     }
 
     // Lọc sessions: Bảo toàn 100% ca đánh hợp lệ, loại bỏ ca đánh rác kiểm thử hoặc mẫu giả định
@@ -431,15 +430,8 @@ const AppStorage = {
   // 2. Cơ chế Đối soát & Đồng bộ 2 chiều tuyệt đối giữa Users (Tài khoản) và Members (Danh bạ)
   reconcileUsersAndMembers(data) {
     if (!data) return data;
-    if (!Array.isArray(data.users)) data.users = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.users));
+    if (!Array.isArray(data.users)) data.users = [];
     if (!Array.isArray(data.members)) data.members = [];
-
-    // Đảm bảo có tài khoản admin duy nhất
-    let adminUser = data.users.find(u => u.username === 'admin');
-    if (!adminUser) {
-      adminUser = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA.users[0]));
-      data.users.unshift(adminUser);
-    }
 
     // Đồng bộ từng user với member (mật khẩu chỉ nằm trên máy chủ, không tự gán mật khẩu mặc định)
     data.users.forEach(user => {
@@ -473,15 +465,16 @@ const AppStorage = {
       // Loại bỏ mồ côi
       data.monthlyContributions = data.monthlyContributions.filter(d => d && d.memberId && activeFixedMemberIds.has(d.memberId));
       
-      const currentMonth = "2026-09";
-      activeFixedMembers.forEach(m => {
+      const currentMonth = this.currentMonth();
+      const monthlyFee = Number(data.clubInfo?.monthlyFee || data.clubInfo?.monthlyFundFee) || 0;
+      if (monthlyFee > 0) activeFixedMembers.forEach(m => {
         const hasDue = data.monthlyContributions.some(d => d.month === currentMonth && d.memberId === m.id);
         if (!hasDue) {
           data.monthlyContributions.push({
             id: `due_${currentMonth}_${m.id}`,
             month: currentMonth,
             memberId: m.id,
-            amount: data.clubInfo?.monthlyFee || data.clubInfo?.monthlyFundFee || 20000,
+            amount: monthlyFee,
             status: "unpaid",
             paidAt: null,
             method: null,
@@ -532,32 +525,7 @@ const AppStorage = {
           });
           s.votes = Array.from(voteMap.values());
 
-          // Tự động khởi tạo và chuẩn hóa lịch sử thay đổi (Vote History) nếu mảng đang rỗng nhưng có votes
-          if (s.voteHistory.length === 0 && s.votes.length > 0) {
-            s.voteHistory = s.votes.map((v, idx) => {
-              const mem = (data.members || []).find(m => m.id === v.memberId) || 
-                          (data.users || []).find(u => u.id === v.memberId || u.memberId === v.memberId) || 
-                          { name: 'Thành viên', avatar: '' };
-              let actionText = '';
-              if (v.status === 'going') actionText = `Đăng ký tham gia${(v.guests || 0) > 0 ? ` (+${v.guests} khách)` : ''}`;
-              else if (v.status === 'not_going' || v.notGoing) actionText = 'Báo vắng / Không đi';
-              else if (v.status === 'maybe') actionText = 'Dự bị';
-              else if (v.selectedOptions && v.selectedOptions.length > 0) actionText = `Bình chọn ${v.selectedOptions.length} phương án`;
-              else actionText = 'Đã bình chọn';
-
-              return {
-                id: `vh_init_${v.memberId || idx}_${Date.now()}_${idx}`,
-                memberId: v.memberId,
-                memberName: mem.name || 'Thành viên',
-                avatar: mem.avatar || '',
-                status: v.status || (v.notGoing ? 'not_going' : (v.selectedOptions ? 'poll' : 'going')),
-                actionText: actionText,
-                guests: v.guests || 0,
-                note: v.note || '',
-                votedAt: v.votedAt || '2026-09-26 20:38'
-              };
-            });
-          }
+          // Lịch sử bình chọn chỉ gồm thao tác thật của người dùng (không tự sinh)
         } else {
           s.votes = [];
         }
@@ -1071,14 +1039,7 @@ const AppStorage = {
     const policy = this._passwordPolicyError(pwd, confirmPassword);
     if (policy) return { success: false, message: policy };
 
-    const avatarList = [
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&auto=format&fit=crop&q=80"
-    ];
-    const avatar = avatarList[Math.floor(Math.random() * avatarList.length)];
+    const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(trimmedName)}&background=10b981&color=fff`;
     const themePreference = (window.App && window.App.theme) || localStorage.getItem('smash_pro_theme') || 'light';
 
     if (this.isLocalOnly()) {
@@ -1666,7 +1627,13 @@ const AppStorage = {
   },
 
   async resetData(showToast = true) {
-    this._replaceAll(JSON.parse(JSON.stringify(PROD_DEFAULT_DATA)));
+    const clean = JSON.parse(JSON.stringify(PROD_DEFAULT_DATA));
+    const view = this.loadData();
+    const staff = (view.users || []).filter(u => u.role === 'admin' || u.role === 'treasurer');
+    clean.users = staff.map(u => { const c = Object.assign({}, u); delete c.password; delete c.pwv; return c; });
+    clean.members = (view.members || []).filter(m => staff.some(u => u.memberId === m.id || u.username === m.username));
+    clean.clubInfo = Object.assign({}, clean.clubInfo, { name: (view.clubInfo || {}).name || '' });
+    this._replaceAll(clean);
 
     if (window.App) {
       App.refreshDashboardStats();

@@ -545,7 +545,7 @@ const App = {
     const members = data.members || [];
     const fixedMembers = members.filter(m => m.type === 'fixed');
     const dues = data.monthlyContributions || [];
-    const currentMonth = "2026-09";
+    const currentMonth = AppStorage.currentMonth();
     const txs = data.transactions || [];
 
     // Số dư quỹ

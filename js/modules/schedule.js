@@ -667,7 +667,7 @@ const ScheduleModule = {
 
     const members = data.members || [];
     const dues = data.monthlyContributions || [];
-    const currentMonth = "2026-09";
+    const currentMonth = AppStorage.currentMonth();
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = this.getVoteLockStatus(session, voteLockHours);
     const currentUser = data.currentUser || AppStorage.getCurrentUser();
@@ -716,7 +716,7 @@ const ScheduleModule = {
               </div>
               <div class="poll-option-meta-item">
                 <i class="fas fa-money-bill-wave"></i>
-                <span>${Number(opt.price || 360000).toLocaleString('vi-VN')} đ</span>
+                <span>${Number(opt.price) ? Number(opt.price).toLocaleString('vi-VN') + ' đ' : 'Chưa nhập giá'}</span>
               </div>
             </div>
 
@@ -2478,7 +2478,7 @@ const ScheduleModule = {
           const date = row.querySelector('.opt-date-input')?.value || defaultDate;
           const startTime = row.querySelector('.opt-start-input')?.value || '18:00';
           const endTime = row.querySelector('.opt-end-input')?.value || '20:00';
-          const price = parseInt(row.querySelector('.opt-price-input')?.value) || 360000;
+          const price = parseInt(row.querySelector('.opt-price-input')?.value) || 0;
 
           if (idx === 0) {
             defaultDate = date;

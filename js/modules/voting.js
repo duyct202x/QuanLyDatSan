@@ -165,7 +165,7 @@ const VotingModule = {
               <input type="checkbox" id="chk-opt-${Safe.html(opt.id)}" ${isChecked ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: var(--primary); pointer-events: none;">
               <span class="font-bold" style="font-size: 0.96rem;">Phương án ${idx + 1}: ${Safe.html(opt.courtName)}</span>
             </div>
-            <span class="text-primary font-bold font-mono" style="font-size: 0.9rem;">${Number(opt.price || 360000).toLocaleString('vi-VN')} đ</span>
+            <span class="text-primary font-bold font-mono" style="font-size: 0.9rem;">${Number(opt.price) ? Number(opt.price).toLocaleString('vi-VN') + ' đ' : 'Chưa nhập giá'}</span>
           </div>
           <div class="poll-option-meta" style="margin-bottom: 0.35rem; padding-left: 1.8rem;">
             <span><i class="far fa-calendar-alt text-primary"></i> ${Safe.html(opt.date || session.date)}</span>
