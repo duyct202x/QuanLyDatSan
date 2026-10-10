@@ -840,6 +840,12 @@ const AppStorage = {
     return !!(u && (u.role === 'admin' || u.role === 'treasurer'));
   },
 
+  // Quyền lên lịch bình chọn tự động / hẹn giờ mở vote: Ban quản trị hoặc thành viên được Admin chỉ định
+  canScheduleVotes() {
+    const u = this.getCurrentUser();
+    return !!(u && (u.role === 'admin' || u.role === 'treasurer' || u.canScheduleVotes === true));
+  },
+
   // Kiểm tra quyền Super Admin
   isSuperAdmin() {
     const u = this.getCurrentUser();

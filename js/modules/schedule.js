@@ -825,6 +825,7 @@ const ScheduleModule = {
           ${VotingModule.renderVoteHistoryTimeline(session.voteHistory || [])}
         </div>
 
+        ${!isAdmin && window.VoteScheduler ? VoteScheduler.renderDelegatePanel(session) : ''}
         ${isAdmin ? `
         <!-- Admin: Quản lý trạng thái (Poll Modal) -->
         <div class="session-status-panel" style="margin-bottom: 1rem;">
@@ -1099,6 +1100,7 @@ const ScheduleModule = {
         ` : ''}
       </div>
 
+      ${!isAdmin && window.VoteScheduler ? VoteScheduler.renderDelegatePanel(session) : ''}
       ${isAdmin ? `
       <!-- Admin: Quản lý trạng thái vòng đời buổi đặt sân -->
       <div class="session-status-panel">

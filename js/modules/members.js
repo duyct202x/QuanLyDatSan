@@ -534,6 +534,13 @@ const MembersModule = {
           </div>
         </div>
 
+        ${AppStorage.isSuperAdmin() && user.username ? `
+        <label class="form-group" style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+          <input type="checkbox" id="edit-mem-can-schedule" ${user.canScheduleVotes === true ? 'checked' : ''} style="margin-top: 0.2rem;">
+          <span><b><i class="fas fa-calendar-plus text-primary"></i> Được lên lịch bình chọn tự động</b><br>
+          <span class="text-secondary" style="font-size: 0.78rem;">Tạo/sửa lịch bình chọn lặp lại, hẹn giờ mở vote. Không có quyền quản trị khác (Admin/Thủ quỹ luôn có quyền này).</span></span>
+        </label>` : ''}
+
         <div class="form-group">
           <label class="form-label">Ghi chú / Trình độ</label>
           <input type="text" id="edit-mem-note" class="form-control" value="${Safe.html(m.note || user.note || '')}" placeholder="VD: Trình độ trung bình khá...">
@@ -592,6 +599,11 @@ const MembersModule = {
       user.role = m.role;
       user.type = m.type;
       if (avatar) user.avatar = avatar;
+      const canSchedule = document.getElementById('edit-mem-can-schedule');
+      if (canSchedule && AppStorage.isSuperAdmin()) {
+        if (canSchedule.checked) user.canScheduleVotes = true;
+        else delete user.canScheduleVotes;
+      }
       if (newPwd) {
         if (newPwd.length < 6) {
           App.showToast("Mật khẩu mới phải có tối thiểu 6 ký tự trở lên!", "error");

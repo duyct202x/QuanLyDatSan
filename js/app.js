@@ -31,6 +31,11 @@ const App = {
       MembershipModule.init();
     }
 
+    // Lịch bình chọn tự động (Ban quản trị & thành viên được Admin chỉ định)
+    if (window.AutoScheduleModule) {
+      AutoScheduleModule.init();
+    }
+
     // Khởi tạo trước ScheduleModule để dữ liệu lịch luôn hiển thị ngay từ lần đầu
     if (window.ScheduleModule) {
       ScheduleModule.init();
@@ -504,6 +509,7 @@ const App = {
         if (window.ScheduleModule) {
           ScheduleModule.init();
         }
+        if (window.AutoScheduleModule) AutoScheduleModule.renderPanel();
         break;
       case 'members':
         if (window.MembersModule) {

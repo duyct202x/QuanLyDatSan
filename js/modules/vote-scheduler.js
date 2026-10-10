@@ -65,6 +65,7 @@ const VoteScheduler = {
     const cfg = (club && club.autoVoteOpen) || {};
     const day = this._ymd(dateStr);
     if (!cfg.enabled || !day) return '';
+    if (window.VotePlan) return VotePlan.openAtFor(dateStr, startTime, Object.assign({ mode: 'daysBefore' }, cfg));
     const time = /^\d{2}:\d{2}$/.test(cfg.time || '') ? cfg.time : '08:00';
     const startMs = this.parseLocal(`${dateStr}T${/^\d{2}:\d{2}/.test(startTime || '') ? startTime.slice(0, 5) : '23:59'}`);
     const before = (ymdStr) => this.parseLocal(`${ymdStr}T${time}`) < startMs;
@@ -166,7 +167,7 @@ const VoteScheduler = {
 
   // ---------------- Giao diện Ban quản trị ----------------
   renderAdminButton(session) {
-    if (!AppStorage.isAdmin() || !session || session.status === 'completed' || session.status === 'cancelled') return '';
+    if (!AppStorage.canScheduleVotes() || !session || session.status === 'completed' || session.status === 'cancelled') return '';
     const st = this.getOpenState(session);
     const sub = !st.scheduled ? 'Đang mở ngay' : st.isOpen ? `Đã mở lúc ${st.label}` : `Mở lúc ${st.label}`;
     return `
@@ -177,9 +178,24 @@ const VoteScheduler = {
             </button>`;
   },
 
+  // Thành viên được Admin chỉ định (không phải Ban quản trị): khung riêng chỉ có nút hẹn giờ / lặp lại
+  renderDelegatePanel(session) {
+    if (AppStorage.isAdmin() || !AppStorage.canScheduleVotes() || !session || session.status === 'completed' || session.status === 'cancelled') return '';
+    return `
+        <div class="session-status-panel" style="margin-bottom: 1rem;">
+          <div class="session-status-panel-title"><i class="fas fa-stopwatch"></i> Lịch bình chọn (bạn được Admin giao quyền)</div>
+          <div class="session-status-btn-row">
+            ${this.renderAdminButton(session)}
+            <button class="session-status-btn" onclick="App.closeModal(); AutoScheduleModule.openFromSession(${Safe.js(session.id)})">
+              <i class="fas fa-redo"></i><span>Lặp lại buổi này</span><small>Tuần sau / hằng tuần</small>
+            </button>
+          </div>
+        </div>`;
+  },
+
   openScheduleModal(sessionId) {
-    if (!AppStorage.isAdmin()) {
-      App.showToast('Chỉ Ban quản trị mới có quyền hẹn giờ mở bình chọn!', 'warning');
+    if (!AppStorage.canScheduleVotes()) {
+      App.showToast('Bạn chưa được Admin giao quyền hẹn giờ mở bình chọn!', 'warning');
       return;
     }
     const data = AppStorage.loadData();
@@ -204,6 +220,7 @@ const VoteScheduler = {
         <div class="modal-footer" style="padding: 1rem 0 0 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem;">
           <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
           <button type="button" class="btn btn-outline-primary" onclick="VoteScheduler.openNow(${Safe.js(session.id)})"><i class="fas fa-bolt"></i> Mở vote ngay</button>
+          ${window.AutoScheduleModule ? `<button type="button" class="btn btn-outline-primary" onclick="App.closeModal(); AutoScheduleModule.openFromSession(${Safe.js(session.id)})"><i class="fas fa-redo"></i> Lặp lại tuần sau</button>` : ''}
           <button type="submit" class="btn btn-primary"><i class="fas fa-stopwatch"></i> Lưu hẹn giờ</button>
         </div>
       </form>
@@ -213,6 +230,7 @@ const VoteScheduler = {
 
   saveSchedule(e, sessionId) {
     if (e && e.preventDefault) e.preventDefault();
+    if (!AppStorage.canScheduleVotes()) return;
     const value = document.getElementById('vote-open-at-input')?.value || '';
     const openMs = this.parseLocal(value);
     if (isNaN(openMs)) {
@@ -236,6 +254,7 @@ const VoteScheduler = {
   },
 
   openNow(sessionId) {
+    if (!AppStorage.canScheduleVotes()) return;
     const data = AppStorage.loadData();
     const session = (data.sessions || []).find((s) => s.id === sessionId);
     if (!session) return;
