@@ -28,6 +28,8 @@ const AppStorage = {
   BEACON_LIMIT: 60000,
   MASS_DELETE_MIN: 10,       // Chặn lệnh xóa hàng loạt bất thường (lỗi lập trình) trong 1 lần lưu
   BACKUP_INTERVAL: 60 * 60 * 1000,
+  BACKUP_KEEP: 10,           // Số bản sao luân phiên giữ trên thiết bị
+  MIN_SERVER_API: 3,         // Máy chủ cũ hơn -> không áp dữ liệu (tránh xử lý nhầm khi deploy lệch phiên bản)
 
   isTestEnvironment() {
     try {
@@ -118,6 +120,9 @@ const AppStorage = {
       clockOffset: Number(meta.clockOffset) || 0,
       lastBackupAt: Number(meta.lastBackupAt) || 0
     };
+    this._backups = Array.isArray(meta.backups) ? meta.backups : [];
+    this._legacyBackups = { legacyBackup: meta.legacyBackup || null, backup: meta.backup || null };
+    this._serverWarning = null;
     this._outbox = LocalDB.loadOutbox(env, meta.outbox);
     this._opCounter = this._outbox.reduce((m, op) => Math.max(m, op.n || 0), 0);
     this._clock.setOffset(this._meta.clockOffset);
@@ -1386,11 +1391,43 @@ const AppStorage = {
     }
   },
 
+  // Số bản ghi đang dùng trên thiết bị (để phát hiện phản hồi bất thường từ máy chủ)
+  _localLiveCount() {
+    return Object.keys(this._confirmed).filter((rk) => SyncCore.isLive(this._confirmed[rk])).length;
+  },
+
+  // Cảnh báo dữ liệu máy chủ bất thường: GIỮ NGUYÊN dữ liệu trên thiết bị, không áp gì
+  _holdServerData(reason, message) {
+    const first = !this._serverWarning || this._serverWarning.reason !== reason;
+    this._serverWarning = { reason, message, at: Date.now() };
+    if (first) this._maybeBackup('may-chu-bat-thuong'); // Chụp ngay dữ liệu đang giữ trên thiết bị
+    console.error('[Sync] ' + message);
+    if (first && window.App) App.showToast(`⚠️ ${message}`, 'error');
+    this._emitChanged();
+  },
+
   async _applyServerResponse(res, batch, auth = {}) {
     const env = this._env;
     const changed = {};
+    // Bảo vệ 1: máy chủ chưa cập nhật bản tương thích (deploy giao diện trước backend)
+    if (!(Number(res.api) >= this.MIN_SERVER_API)) {
+      this._holdServerData('api', 'Máy chủ dữ liệu chưa được cập nhật phiên bản mới. Dữ liệu trên thiết bị được giữ nguyên, chưa đồng bộ.');
+      return;
+    }
+    // Bảo vệ 2: máy chủ trả về kho TRỐNG HOÀN TOÀN trong khi thiết bị đang có dữ liệu
+    // (kho chưa khởi tạo / chuyển dữ liệu lỗi). "Đặt lại CSDL" hợp lệ vẫn có bản ghi (đã đánh dấu xóa) nên không bị chặn.
+    if (res.status !== 'unchanged' && res.full && !(res.records || []).length && this._localLiveCount() > 0) {
+      this._holdServerData('empty', 'Máy chủ đang trả về dữ liệu trống bất thường. Đã GIỮ NGUYÊN dữ liệu trên thiết bị để tránh mất dữ liệu. Ban quản trị vui lòng kiểm tra máy chủ (kiemTraDuLieu).');
+      return;
+    }
+    if (this._serverWarning) {
+      this._serverWarning = null;
+      this._emitChanged();
+    }
     if (res.status !== 'unchanged') {
       if (res.full) {
+        // Sao lưu trạng thái hiện tại trước khi thay bằng bản tải đầy đủ
+        if (this._localLiveCount() > 0) await this._maybeBackup('truoc-khi-tai-toan-bo');
         // Tải đầy đủ: thay toàn bộ bản xác nhận (op chưa gửi vẫn nằm trong outbox và được áp lại)
         this._confirmed = {};
       }
@@ -1453,12 +1490,80 @@ const AppStorage = {
   },
 
   // Bản sao lưu cục bộ (trong IndexedDB, tối đa 1 lần/giờ) - thay cho 7 bản sao trong localStorage của v1
-  _maybeBackup() {
+  _backupCounts(view) {
+    const n = (k) => (Array.isArray(view[k]) ? view[k].length : 0);
+    return { users: n('users'), members: n('members'), sessions: n('sessions'), transactions: n('transactions'), dues: n('monthlyContributions') };
+  },
+
+  // reason: lý do sao lưu ngay (bỏ qua giới hạn 1 giờ/lần)
+  async _maybeBackup(reason) {
     const now = Date.now();
-    if (now - (this._meta.lastBackupAt || 0) < this.BACKUP_INTERVAL) return;
+    if (!reason && now - (this._meta.lastBackupAt || 0) < this.BACKUP_INTERVAL) return;
+    const json = this._getViewJson();
+    const view = JSON.parse(json);
+    if (view.isInitialSkeleton || this._localLiveCount() === 0) return; // Không sao lưu khung trống
+    const list = Array.isArray(this._backups) ? this._backups.slice() : [];
+    if (list.length && list[list.length - 1].json === json) return;
+    list.push({ id: `b${now}`, at: now, reason: reason || 'dinh-ky', seq: this._meta.lastSeq, counts: this._backupCounts(view), json });
+    this._backups = list.slice(-this.BACKUP_KEEP);
     this._meta.lastBackupAt = now;
-    LocalDB.write(this._env, { meta: { lastBackupAt: now, backup: { at: now, json: this._getViewJson() } } })
-      .catch((e) => console.warn('[Storage] Không lưu được bản sao lưu:', e));
+    try {
+      await LocalDB.write(this._env, { meta: { lastBackupAt: now, backups: this._backups } });
+    } catch (e) {
+      console.warn('[Storage] Không lưu được bản sao lưu:', e);
+    }
+  },
+
+  // Danh sách bản sao trên thiết bị (mới nhất trước), gồm cả bản dữ liệu kiểu cũ lúc nâng cấp
+  listLocalBackups() {
+    const out = (this._backups || []).map((b) => ({ id: b.id, at: b.at, reason: b.reason, counts: b.counts }));
+    const legacy = this._legacyBackups || {};
+    const add = (id, raw, reason) => {
+      try {
+        const d = JSON.parse(raw);
+        out.push({ id, at: Number(d.lastModified) || 0, reason, counts: this._backupCounts(d) });
+      } catch (e) {}
+    };
+    if (legacy.legacyBackup) add('legacy', legacy.legacyBackup, 'du-lieu-ban-cu-luc-nang-cap');
+    if (legacy.backup && legacy.backup.json) add('old-hourly', legacy.backup.json, 'ban-sao-cu');
+    return out.filter((b) => (b.counts.members + b.counts.sessions + b.counts.users) > 0).sort((a, b) => b.at - a.at);
+  },
+
+  _localBackupData(id) {
+    const b = (this._backups || []).find((x) => x.id === id);
+    if (b) return JSON.parse(b.json);
+    const legacy = this._legacyBackups || {};
+    if (id === 'legacy' && legacy.legacyBackup) return JSON.parse(legacy.legacyBackup);
+    if (id === 'old-hourly' && legacy.backup) return JSON.parse(legacy.backup.json);
+    return null;
+  },
+
+  downloadLocalBackup(id) {
+    const d = this._localBackupData(id);
+    if (!d) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }));
+    a.download = `smash_pro_ban_sao_${id}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
+  // Ban quản trị gửi một bản sao trên thiết bị lên máy chủ: máy chủ HỢP NHẤT theo từng trường
+  // (chỉ lấy lại dữ liệu bị thiếu/cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò)
+  async restoreLocalBackupToServer(id) {
+    if (!this.isAdmin()) return { success: false, message: 'Chỉ Ban quản trị mới được khôi phục dữ liệu.' };
+    const d = this._localBackupData(id);
+    if (!d) return { success: false, message: 'Không tìm thấy bản sao.' };
+    delete d.currentUser;
+    const snap = Object.assign({}, d, { lastModified: Number(d.lastModified) || Date.now() });
+    this._enqueue([{ t: 'legacy', snap }], false);
+    const ok = await this.syncNow();
+    return { success: ok, message: ok ? 'Đã gửi bản sao lên máy chủ và hợp nhất thành công.' : 'Bản sao đã được xếp hàng, sẽ gửi khi kết nối được máy chủ.' };
+  },
+
+  getServerWarning() {
+    return this._serverWarning;
   },
 
   // Kiểm tra định kỳ khi tab đang hiển thị; mất mạng -> thử lại giãn dần (2s, 4s, ... tối đa 60s)
@@ -1521,6 +1626,7 @@ const AppStorage = {
 
   // Thay toàn bộ CSDL (Đặt lại / Phục hồi): op "reset" xóa mọi bản ghi cũ, sau đó tạo lại từ `data`
   _replaceAll(data) {
+    this._maybeBackup('truoc-khi-thay-toan-bo');
     const resetOp = { t: 'reset', h: this._clock.now() };
     const putOps = SyncCore.diffData({}, data, this._clock.now(), () => false);
     this._enqueue([resetOp, ...putOps], false);
@@ -1598,6 +1704,11 @@ const AppStorage = {
       return;
     }
     const pending = this._outbox.length;
+    if (this._serverWarning && status !== 'syncing') {
+      this.cloudSyncStatus = 'error';
+      this.updateSyncBadgeUI('offline', `Đồng bộ database (${envLabel}): ⚠️ Máy chủ bất thường - đang giữ dữ liệu trên thiết bị`);
+      return;
+    }
     if (!status) status = this._syncPromise ? 'syncing' : (this._failCount ? 'offline' : 'synced');
     this.cloudSyncStatus = status;
     if (status === 'syncing') {

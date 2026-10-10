@@ -42,6 +42,7 @@ const SettingsModule = {
       this.setValue('set-email-reminder-hours', mail.reminderHours || 4);
       this.setValue('set-email-vote-audience', mail.voteOpenAudience || 'all');
       this.refreshEmailStatus(false);
+      this.renderDeviceBackups();
 
       const autoApproveToggle = document.getElementById('set-auto-approve');
       if (autoApproveToggle) {
@@ -78,6 +79,40 @@ const SettingsModule = {
     } else {
       line.textContent = `⚠️ ${res.message || 'Không kiểm tra được trình gửi email.'}`;
     }
+  },
+
+  // Bản sao lưu trên thiết bị: xem, tải về, gửi lên máy chủ (hợp nhất, không xóa dữ liệu mới)
+  renderDeviceBackups() {
+    const box = document.getElementById('device-backups-panel');
+    if (!box) return;
+    if (!AppStorage.isAdmin()) { box.innerHTML = ''; return; }
+    const warn = AppStorage.getServerWarning();
+    const list = AppStorage.listLocalBackups();
+    const fmt = (ms) => ms ? new Date(ms).toLocaleString('vi-VN') : '?';
+    box.innerHTML = `
+      <div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1rem;">
+        <div class="font-bold" style="margin-bottom: 0.5rem;"><i class="fas fa-shield-alt text-primary"></i> Bản sao lưu dữ liệu trên thiết bị này</div>
+        ${warn ? `<div class="badge badge-warning" style="display: block; white-space: normal; margin-bottom: 0.6rem; padding: 0.5rem;">⚠️ ${Safe.html(warn.message)}</div>` : ''}
+        <div class="text-secondary" style="font-size: 0.8rem; margin-bottom: 0.5rem;">Thiết bị tự giữ ${AppStorage.BACKUP_KEEP} bản gần nhất (mỗi giờ và trước mọi thao tác thay toàn bộ dữ liệu). Máy chủ cũng tự sao lưu mỗi ngày và mỗi lần cập nhật phiên bản.</div>
+        ${list.length ? list.map((b) => `
+          <div class="flex items-center justify-between" style="gap: 0.5rem; padding: 0.45rem 0; border-top: 1px solid var(--border-color); flex-wrap: wrap;">
+            <div style="font-size: 0.82rem;">
+              <b>${Safe.html(fmt(b.at))}</b> <span class="text-secondary">(${Safe.html(b.reason)})</span><br>
+              <span class="text-secondary">${b.counts.users} tài khoản • ${b.counts.members} thành viên • ${b.counts.sessions} buổi • ${b.counts.transactions} giao dịch</span>
+            </div>
+            <div class="flex" style="gap: 0.4rem;">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="AppStorage.downloadLocalBackup(${Safe.js(b.id)})"><i class="fas fa-download"></i> Tải về</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="SettingsModule.restoreDeviceBackup(${Safe.js(b.id)})"><i class="fas fa-cloud-upload-alt"></i> Khôi phục lên máy chủ</button>
+            </div>
+          </div>`).join('') : '<div class="text-secondary" style="font-size: 0.82rem;">Chưa có bản sao nào trên thiết bị này.</div>'}
+      </div>`;
+  },
+
+  async restoreDeviceBackup(id) {
+    if (!confirm('Gửi bản sao này lên máy chủ?\n\nMáy chủ sẽ HỢP NHẤT: chỉ lấy lại dữ liệu bị thiếu hoặc cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò.')) return;
+    const res = await AppStorage.restoreLocalBackupToServer(id);
+    App.showToast(res.message, res.success ? 'success' : 'warning');
+    this.renderDeviceBackups();
   },
 
   async sendTestEmail() {
