@@ -125,7 +125,10 @@ const AppStorage = {
       clockOffset: Number(meta.clockOffset) || 0,
       lastBackupAt: Number(meta.lastBackupAt) || 0
     };
-    this._backups = Array.isArray(meta.backups) ? meta.backups : [];
+    this._backups = this._cleanBackups(meta.backups);
+    if (Array.isArray(meta.backups) && this._backups.length !== meta.backups.length) {
+      LocalDB.write(this._env, { meta: { backups: this._backups } }).catch(() => {});
+    }
     this._legacyBackups = { legacyBackup: meta.legacyBackup || null, backup: meta.backup || null };
     this._serverWarning = null;
     this._outbox = LocalDB.loadOutbox(env, meta.outbox);
@@ -1090,6 +1093,42 @@ const AppStorage = {
     return { success: true, user: res.user, mustChange: !!res.mustChange, message: res.message };
   },
 
+  // ---------------- Đăng nhập bằng Google (máy chủ xác minh ID token) ----------------
+  async googleLogin(credential, remember = true) {
+    if (this.isLocalOnly()) return { success: false, message: 'Chế độ chạy cục bộ không hỗ trợ đăng nhập Google.' };
+    const res = await this._authRequest({ action: 'googleLogin', credential });
+    if (res.status === 'not_linked') return { success: false, notLinked: true, email: res.email, name: res.name, emailInUse: !!res.emailInUse, message: res.message };
+    if (res.status !== 'ok') return { success: false, message: res.message || 'Đăng nhập Google thất bại!' };
+    this._startSession(res.user, res.token, remember, false);
+    return { success: true, user: this.getCurrentUser() || res.user, message: res.message };
+  },
+
+  async googleRegister(credential, memberType = 'fixed', remember = true) {
+    if (this.isLocalOnly()) return { success: false, message: 'Chế độ chạy cục bộ không hỗ trợ đăng ký bằng Google.' };
+    const themePreference = (window.App && window.App.theme) || 'light';
+    const res = await this._authRequest({ action: 'googleRegister', credential, memberType, themePreference });
+    if (res.status !== 'ok') return { success: false, message: res.message || 'Không tạo được tài khoản Google!' };
+    this._startSession(res.user, res.token, remember, false);
+    return { success: true, user: this.getCurrentUser() || res.user, message: res.message };
+  },
+
+  async _googleSessionAction(action, extra) {
+    const session = this._readSession();
+    if (!session || !session.token) return { success: false, message: 'Vui lòng đăng nhập lại!' };
+    const res = await this._authRequest(Object.assign({ action, token: session.token }, extra));
+    if (res.status !== 'ok') return { success: false, message: res.message || 'Thao tác thất bại!' };
+    this._startSession(res.user, session.token, session.remember, session.mustChange);
+    return { success: true, message: res.message };
+  },
+
+  googleLink(credential) {
+    return this._googleSessionAction('googleLink', { credential });
+  },
+
+  googleUnlink() {
+    return this._googleSessionAction('googleUnlink', {});
+  },
+
   // Đăng xuất khỏi hệ thống
   logout(explicit = true) {
     if (explicit) {
@@ -1117,7 +1156,9 @@ const AppStorage = {
   async changePassword(userId, oldPassword, newPassword, confirmPassword) {
     const oldPwd = (oldPassword || "").trim();
     const newPwd = (newPassword || "").trim();
-    if (!oldPwd) return { success: false, message: "Vui lòng nhập mật khẩu hiện tại!" };
+    const me = this.getCurrentUser();
+    const firstPassword = !!(me && me.googleOnly === true);
+    if (!oldPwd && !firstPassword) return { success: false, message: "Vui lòng nhập mật khẩu hiện tại!" };
     const policy = this._passwordPolicyError(newPwd, confirmPassword);
     if (policy) return { success: false, message: policy.replace("Mật khẩu", "Mật khẩu mới") };
     if (oldPwd === newPwd) return { success: false, message: "Mật khẩu mới không được trùng với mật khẩu cũ!" };
@@ -1197,7 +1238,7 @@ const AppStorage = {
     // Đổi mật khẩu (nếu có nhập) qua máy chủ TRƯỚC, thất bại thì không lưu gì
     const wantsPassword = !!((currentPassword || "").trim() || (newPassword || "").trim() || (confirmPassword || "").trim());
     if (wantsPassword) {
-      if (!(currentPassword || "").trim()) {
+      if (!(currentPassword || "").trim() && !(user && user.googleOnly === true)) {
         return { success: false, message: "Vui lòng nhập Mật khẩu hiện tại để xác nhận thay đổi mật khẩu!" };
       }
       const pw = await this.changePassword(user.username, currentPassword, newPassword, confirmPassword);
@@ -1392,6 +1433,7 @@ const AppStorage = {
   async _applyServerResponse(res, batch, auth = {}) {
     const env = this._env;
     const changed = {};
+    let preFull = null;
     // Bảo vệ 1: máy chủ chưa cập nhật bản tương thích (deploy giao diện trước backend)
     if (!(Number(res.api) >= this.MIN_SERVER_API)) {
       this._holdServerData('api', 'Máy chủ dữ liệu chưa được cập nhật phiên bản mới. Dữ liệu trên thiết bị được giữ nguyên, chưa đồng bộ.');
@@ -1410,7 +1452,9 @@ const AppStorage = {
     if (res.status !== 'unchanged') {
       if (res.full) {
         // Sao lưu trạng thái hiện tại trước khi thay bằng bản tải đầy đủ
-        if (this._localLiveCount() > 0) await this._maybeBackup('truoc-khi-tai-toan-bo');
+        if (this._localLiveCount() > 0 && this._backupScopeOk()) {
+          preFull = { json: this._getViewJson(), live: Object.keys(this._confirmed).filter((rk) => SyncCore.isLive(this._confirmed[rk])) };
+        }
         // Tải đầy đủ: thay toàn bộ bản xác nhận (op chưa gửi vẫn nằm trong outbox và được áp lại)
         this._confirmed = {};
       }
@@ -1432,6 +1476,9 @@ const AppStorage = {
         this._syncAgain = true;
       }
       this._meta.scope = res.scope;
+    }
+    if (preFull && this._backupScopeOk() && preFull.live.some((rk) => !SyncCore.isLive(this._confirmed[rk]))) {
+      await this._maybeBackup('truoc-khi-tai-toan-bo', preFull.json);
     }
 
     if (batch.length && Array.isArray(res.acked)) {
@@ -1478,16 +1525,35 @@ const AppStorage = {
     return { users: n('users'), members: n('members'), sessions: n('sessions'), transactions: n('transactions'), dues: n('monthlyContributions') };
   },
 
-  // reason: lý do sao lưu ngay (bỏ qua giới hạn 1 giờ/lần)
-  async _maybeBackup(reason) {
+  // Chỉ sao lưu khi thiết bị đang giữ dữ liệu ĐẦY ĐỦ (Ban quản trị / chạy cục bộ).
+  // Dữ liệu của khách/thành viên đã bị máy chủ lọc bớt -> sao lưu vô ích và gây nhầm khi khôi phục.
+  _backupScopeOk() {
+    return this.isLocalOnly() || this._meta.scope === 'staff';
+  },
+
+  // Dọn danh sách cũ: bỏ bản chụp từ quyền xem bị lọc (0 tài khoản) và bản trùng nội dung (giữ bản mới nhất)
+  _cleanBackups(list) {
+    const seen = new Set();
+    return (Array.isArray(list) ? list : []).slice().reverse().filter((b) => {
+      if (!b || !b.json || !b.counts) return false;
+      if (b.scope ? (b.scope !== 'staff' && b.scope !== 'local') : b.counts.users === 0) return false;
+      if (seen.has(b.json)) return false;
+      seen.add(b.json);
+      return true;
+    }).reverse().slice(-this.BACKUP_KEEP);
+  },
+
+  // reason: lý do sao lưu ngay (bỏ qua giới hạn 1 giờ/lần); json: nội dung cần lưu (mặc định: dữ liệu hiện tại)
+  async _maybeBackup(reason, json) {
     const now = Date.now();
     if (!reason && now - (this._meta.lastBackupAt || 0) < this.BACKUP_INTERVAL) return;
-    const json = this._getViewJson();
+    if (!this._backupScopeOk()) return;
+    json = json || this._getViewJson();
     const view = JSON.parse(json);
     if (view.isInitialSkeleton || this._localLiveCount() === 0) return; // Không sao lưu khung trống
     const list = Array.isArray(this._backups) ? this._backups.slice() : [];
-    if (list.length && list[list.length - 1].json === json) return;
-    list.push({ id: `b${now}`, at: now, reason: reason || 'dinh-ky', seq: this._meta.lastSeq, counts: this._backupCounts(view), json });
+    if (list.some((b) => b.json === json)) return; // Nội dung đã có bản sao -> không lưu trùng
+    list.push({ id: `b${now}`, at: now, reason: reason || 'dinh-ky', scope: this.isLocalOnly() ? 'local' : 'staff', seq: this._meta.lastSeq, counts: this._backupCounts(view), json });
     this._backups = list.slice(-this.BACKUP_KEEP);
     this._meta.lastBackupAt = now;
     try {
@@ -1510,6 +1576,24 @@ const AppStorage = {
     if (legacy.legacyBackup) add('legacy', legacy.legacyBackup, 'du-lieu-ban-cu-luc-nang-cap');
     if (legacy.backup && legacy.backup.json) add('old-hourly', legacy.backup.json, 'ban-sao-cu');
     return out.filter((b) => (b.counts.members + b.counts.sessions + b.counts.users) > 0).sort((a, b) => b.at - a.at);
+  },
+
+  // Số lượng hiện tại (so sánh với bản sao: bản sao có NHIỀU hơn -> có thể chứa dữ liệu đã mất)
+  currentBackupCounts() {
+    return this._backupCounts(JSON.parse(this._getViewJson()));
+  },
+
+  async deleteLocalBackup(id) {
+    if (!this.isAdmin()) return false;
+    if (id === 'legacy' || id === 'old-hourly') {
+      const key = id === 'legacy' ? 'legacyBackup' : 'backup';
+      this._legacyBackups = Object.assign({}, this._legacyBackups, { [key]: null });
+      await LocalDB.write(this._env, { meta: { [key]: null } });
+      return true;
+    }
+    this._backups = (this._backups || []).filter((b) => b.id !== id);
+    await LocalDB.write(this._env, { meta: { backups: this._backups } });
+    return true;
   },
 
   _localBackupData(id) {

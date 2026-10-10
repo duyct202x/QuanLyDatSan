@@ -230,6 +230,7 @@ const App = {
     if (overlay) {
       overlay.classList.add('active');
       this.switchAuthTab(tab);
+      if (window.GoogleAuth) GoogleAuth.renderAuthButtons();
     }
   },
 
@@ -1051,6 +1052,8 @@ const App = {
           <input type="text" id="profile-note" class="form-control" value="${Safe.html(user.note || member.note || '')}" placeholder="Ví dụ: Trình độ trung bình khá, thuận tay phải, chuyên đánh đôi...">
         </div>
 
+        ${window.GoogleAuth ? GoogleAuth.renderProfileSection(user) : ''}
+
         <!-- 3. Khu vực Đổi mật khẩu -->
         <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">
           <div style="font-weight: 700; color: var(--text-main); font-size: 0.88rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;">
@@ -1090,6 +1093,23 @@ const App = {
     `;
 
     this.openModal("👤 Hồ sơ cá nhân & Đổi ảnh đại diện", modalBody);
+    if (window.GoogleAuth && !user.googleLinked) GoogleAuth.renderButtons(['google-link-btn'], 'link', 'signin_with');
+    if (user.googleOnly) {
+      // Tài khoản tạo bằng Google: đặt mật khẩu lần đầu, không có mật khẩu cũ
+      const cur = document.getElementById('profile-current-pwd');
+      if (cur) cur.closest('.form-group').style.display = 'none';
+    }
+  },
+
+  // Sau khi đăng nhập thành công (mật khẩu hoặc Google)
+  onLoginSuccess(result) {
+    this.wasLoggedIn = true;
+    this.applyUserTheme(result.user);
+    this.closeAuthModal();
+    this.renderUserHeaderAndSidebar();
+    this.refreshDashboardStats();
+    this.openTab('dashboard');
+    this.showToast(result.message, result.mustChange ? "warning" : "success");
   },
 
   async saveUserProfile(e) {

@@ -1241,6 +1241,12 @@
           <button type="submit" class="btn btn-primary w-full btn-lg" style="justify-content: center;">
             <i class="fas fa-sign-in-alt"></i> Đăng nhập
           </button>
+          <div data-google-wrap style="margin-top: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+              <span style="flex: 1; height: 1px; background: var(--border-color);"></span>hoặc<span style="flex: 1; height: 1px; background: var(--border-color);"></span>
+            </div>
+            <div id="google-login-btn" style="display: flex; justify-content: center; min-height: 44px;"></div>
+          </div>
         </form>
 
         <!-- FORM 2: TẠO TÀI KHOẢN MỚI -->
@@ -1306,6 +1312,12 @@
           <button type="submit" class="btn btn-success w-full btn-lg" style="justify-content: center;">
             <i class="fas fa-user-plus"></i> Đăng ký
           </button>
+          <div data-google-wrap style="margin-top: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+              <span style="flex: 1; height: 1px; background: var(--border-color);"></span>hoặc<span style="flex: 1; height: 1px; background: var(--border-color);"></span>
+            </div>
+            <div id="google-register-btn" style="display: flex; justify-content: center; min-height: 44px;"></div>
+          </div>
         </form>
       </div>
     </div>
@@ -1328,25 +1340,26 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
-  <script src="js/data.js?v=2.10.0"></script>
-  <script src="js/sync-core.js?v=2.10.0"></script>
-  <script src="js/auth-core.js?v=2.10.0"></script>
-  <script src="js/vote-plan.js?v=2.10.0"></script>
-  <script src="js/local-db.js?v=2.10.0"></script>
-  <script src="js/storage.js?v=2.10.0"></script>
-  <script src="js/html-safe.js?v=2.10.0"></script>
-  <script src="js/modules/members.js?v=2.10.0"></script>
-  <script src="js/modules/schedule.js?v=2.10.0"></script>
-  <script src="js/modules/voting.js?v=2.10.0"></script>
-  <script src="js/modules/vote-scheduler.js?v=2.10.0"></script>
-  <script src="js/modules/membership.js?v=2.10.0"></script>
-  <script src="js/modules/auto-schedule.js?v=2.10.0"></script>
-  <script src="js/modules/fund.js?v=2.10.0"></script>
-  <script src="js/modules/cashbook.js?v=2.10.0"></script>
-  <script src="js/modules/bill-splitter.js?v=2.10.0"></script>
-  <script src="js/modules/settings.js?v=2.10.0"></script>
-  <script src="js/modules/notification.js?v=2.10.0"></script>
-  <script src="js/app.js?v=2.10.0"></script>
+  <script src="js/data.js?v=2.11.0"></script>
+  <script src="js/sync-core.js?v=2.11.0"></script>
+  <script src="js/auth-core.js?v=2.11.0"></script>
+  <script src="js/vote-plan.js?v=2.11.0"></script>
+  <script src="js/local-db.js?v=2.11.0"></script>
+  <script src="js/storage.js?v=2.11.0"></script>
+  <script src="js/html-safe.js?v=2.11.0"></script>
+  <script src="js/modules/members.js?v=2.11.0"></script>
+  <script src="js/modules/schedule.js?v=2.11.0"></script>
+  <script src="js/modules/voting.js?v=2.11.0"></script>
+  <script src="js/modules/vote-scheduler.js?v=2.11.0"></script>
+  <script src="js/modules/membership.js?v=2.11.0"></script>
+  <script src="js/modules/auto-schedule.js?v=2.11.0"></script>
+  <script src="js/modules/google-auth.js?v=2.11.0"></script>
+  <script src="js/modules/fund.js?v=2.11.0"></script>
+  <script src="js/modules/cashbook.js?v=2.11.0"></script>
+  <script src="js/modules/bill-splitter.js?v=2.11.0"></script>
+  <script src="js/modules/settings.js?v=2.11.0"></script>
+  <script src="js/modules/notification.js?v=2.11.0"></script>
+  <script src="js/app.js?v=2.11.0"></script>
 
 </body>
 </html>

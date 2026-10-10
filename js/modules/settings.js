@@ -86,31 +86,67 @@ const SettingsModule = {
     }
   },
 
-  // Bản sao lưu trên thiết bị: xem, tải về, gửi lên máy chủ (hợp nhất, không xóa dữ liệu mới)
+  BACKUP_REASONS: {
+    'dinh-ky': 'Tự động hằng giờ',
+    'truoc-khi-tai-toan-bo': 'Trước khi tải lại làm mất dữ liệu',
+    'truoc-khi-thay-toan-bo': 'Trước khi đặt lại / nhập dữ liệu',
+    'may-chu-bat-thuong': 'Khi máy chủ trả dữ liệu bất thường',
+    'du-lieu-ban-cu-luc-nang-cap': 'Dữ liệu bản cũ lúc nâng cấp',
+    'ban-sao-cu': 'Bản sao kiểu cũ (v1)'
+  },
+  BACKUP_SHOWN: 3,
+
+  // Bản sao lưu trên thiết bị: xem, tải về, gửi lên máy chủ (hợp nhất, không xóa dữ liệu mới), xóa
   renderDeviceBackups() {
     const box = document.getElementById('device-backups-panel');
     if (!box) return;
     if (!AppStorage.isAdmin()) { box.innerHTML = ''; return; }
     const warn = AppStorage.getServerWarning();
     const list = AppStorage.listLocalBackups();
-    const fmt = (ms) => ms ? new Date(ms).toLocaleString('vi-VN') : '?';
+    const now = AppStorage.currentBackupCounts();
+    const fmt = (ms) => ms ? new Date(ms).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }) : 'Không rõ thời gian';
+    const LABELS = [['users', 'tài khoản'], ['members', 'thành viên'], ['sessions', 'buổi'], ['transactions', 'giao dịch'], ['dues', 'phiếu quỹ']];
+    const row = (b) => {
+      const more = LABELS.filter(([k]) => (b.counts[k] || 0) > (now[k] || 0)).map(([k, l]) => `+${b.counts[k] - (now[k] || 0)} ${l}`);
+      const counts = LABELS.filter(([k]) => b.counts[k]).map(([k, l]) => `${b.counts[k]} ${l}`).join(' • ') || 'Không có dữ liệu';
+      return `
+          <div class="backup-row" style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; padding: 0.6rem 0; border-top: 1px solid var(--border-color); flex-wrap: wrap;">
+            <div style="font-size: 0.82rem; min-width: 0; flex: 1 1 260px;">
+              <div><b>${Safe.html(fmt(b.at))}</b> <span class="text-secondary">• ${Safe.html(this.BACKUP_REASONS[b.reason] || b.reason)}</span></div>
+              <div class="text-secondary" style="overflow-wrap: anywhere;">${Safe.html(counts)}</div>
+              ${more.length ? `<div style="color: var(--warning, #f59e0b); font-size: 0.78rem;"><i class="fas fa-exclamation-triangle"></i> Nhiều hơn dữ liệu hiện tại: ${Safe.html(more.join(', '))}</div>` : ''}
+            </div>
+            <div style="display: flex; gap: 0.4rem; flex-shrink: 0;">
+              <button type="button" class="btn btn-secondary btn-sm" title="Tải tệp JSON về máy" onclick="AppStorage.downloadLocalBackup(${Safe.js(b.id)})"><i class="fas fa-download"></i> Tải về</button>
+              <button type="button" class="btn btn-outline-primary btn-sm" title="Gửi lên máy chủ để hợp nhất (không xóa dữ liệu mới)" onclick="SettingsModule.restoreDeviceBackup(${Safe.js(b.id)})"><i class="fas fa-cloud-upload-alt"></i> Khôi phục</button>
+              <button type="button" class="btn btn-secondary btn-sm" title="Xóa bản sao này khỏi thiết bị" onclick="SettingsModule.deleteDeviceBackup(${Safe.js(b.id)})"><i class="fas fa-trash-alt"></i></button>
+            </div>
+          </div>`;
+    };
+    const shown = list.slice(0, this.BACKUP_SHOWN), rest = list.slice(this.BACKUP_SHOWN);
     box.innerHTML = `
       <div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1rem;">
-        <div class="font-bold" style="margin-bottom: 0.5rem;"><i class="fas fa-shield-alt text-primary"></i> Bản sao lưu dữ liệu trên thiết bị này</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.35rem;">
+          <div class="font-bold"><i class="fas fa-shield-alt text-primary"></i> Bản sao lưu trên thiết bị này</div>
+          <span class="badge badge-neutral" style="font-size: 0.72rem;">${list.length} bản</span>
+        </div>
         ${warn ? `<div class="badge badge-warning" style="display: block; white-space: normal; margin-bottom: 0.6rem; padding: 0.5rem;">⚠️ ${Safe.html(warn.message)}</div>` : ''}
-        <div class="text-secondary" style="font-size: 0.8rem; margin-bottom: 0.5rem;">Thiết bị tự giữ ${AppStorage.BACKUP_KEEP} bản gần nhất (mỗi giờ và trước mọi thao tác thay toàn bộ dữ liệu). Máy chủ cũng tự sao lưu mỗi ngày và mỗi lần cập nhật phiên bản.</div>
-        ${list.length ? list.map((b) => `
-          <div class="flex items-center justify-between" style="gap: 0.5rem; padding: 0.45rem 0; border-top: 1px solid var(--border-color); flex-wrap: wrap;">
-            <div style="font-size: 0.82rem;">
-              <b>${Safe.html(fmt(b.at))}</b> <span class="text-secondary">(${Safe.html(b.reason)})</span><br>
-              <span class="text-secondary">${b.counts.users} tài khoản • ${b.counts.members} thành viên • ${b.counts.sessions} buổi • ${b.counts.transactions} giao dịch</span>
-            </div>
-            <div class="flex" style="gap: 0.4rem;">
-              <button type="button" class="btn btn-secondary btn-sm" onclick="AppStorage.downloadLocalBackup(${Safe.js(b.id)})"><i class="fas fa-download"></i> Tải về</button>
-              <button type="button" class="btn btn-primary btn-sm" onclick="SettingsModule.restoreDeviceBackup(${Safe.js(b.id)})"><i class="fas fa-cloud-upload-alt"></i> Khôi phục lên máy chủ</button>
-            </div>
-          </div>`).join('') : '<div class="text-secondary" style="font-size: 0.82rem;">Chưa có bản sao nào trên thiết bị này.</div>'}
+        <div class="text-secondary" style="font-size: 0.78rem; margin-bottom: 0.25rem;">
+          Tự lưu khi dữ liệu thay đổi (tối đa 1 lần/giờ, giữ ${AppStorage.BACKUP_KEEP} bản khác nhau) và trước thao tác có thể làm mất dữ liệu.
+          Chỉ thiết bị của Ban quản trị mới sao lưu. Máy chủ có bản sao riêng (mỗi ngày & mỗi lần cập nhật).
+        </div>
+        ${list.length ? shown.map(row).join('') + (rest.length ? `
+        <details style="border-top: 1px solid var(--border-color); padding-top: 0.5rem;">
+          <summary class="text-secondary" style="cursor: pointer; font-size: 0.82rem;">Xem ${rest.length} bản cũ hơn</summary>
+          ${rest.map(row).join('')}
+        </details>` : '') : '<div class="text-secondary" style="font-size: 0.82rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">Chưa có bản sao nào trên thiết bị này.</div>'}
       </div>`;
+  },
+
+  async deleteDeviceBackup(id) {
+    if (!confirm('Xóa bản sao này khỏi thiết bị? Không ảnh hưởng dữ liệu trên máy chủ.')) return;
+    if (await AppStorage.deleteLocalBackup(id)) App.showToast('🗑️ Đã xóa bản sao', 'success');
+    this.renderDeviceBackups();
   },
 
   async restoreDeviceBackup(id) {
