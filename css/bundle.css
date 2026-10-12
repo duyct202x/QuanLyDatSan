@@ -1301,6 +1301,23 @@ input:checked + .slider:before {
 .auth-side-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 .auth-side-actions .btn { justify-content: center; border-radius: 999px; font-weight: 700; }
 
+/* ===== Bố trí nút Đăng nhập / Đăng ký cho khách: mỗi màn hình chỉ có MỘT nơi đăng nhập chính ===== */
+/* Bỏ các quy tắc cũ của hai nút song song */
+.auth-pill-secondary, .auth-side-actions { display: none; }
+/* Thanh đầu trang: khách không có "hồ sơ" nên không hiện ảnh/tên KH */
+body.is-guest .hdr-user-avatar, body.is-guest .hdr-user-meta { display: none !important; }
+body.is-guest #header-user-section { border-left: 0 !important; padding-left: 0 !important; }
+/* Thẻ khách ở thanh bên */
+.guest-card { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.8rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-card); }
+.guest-card-text { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.4; }
+.guest-card-text b { font-size: 0.86rem; color: var(--text-main); }
+.guest-card-btn { width: 100%; justify-content: center; border-radius: 999px; font-weight: 700; }
+.guest-card-link { background: none; border: 0; padding: 0; cursor: pointer; font-size: 0.78rem; color: var(--text-secondary); text-align: center; }
+.guest-card-link b { color: var(--primary); }
+.guest-card-link:hover b { text-decoration: underline; }
+/* Màn hình rộng (thanh bên luôn hiện): nút đăng nhập ở thanh đầu trang bị ẩn để khỏi trùng với thanh bên */
+@media (min-width: 993px) { body.is-guest #header-auth-btn-wrapper { display: none; } }
+
 /* ===== css/schedule.css ===== */
 /* Schedule, Monthly Calendar & Interactive Session Popover */
 

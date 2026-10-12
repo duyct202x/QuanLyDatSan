@@ -13320,6 +13320,8 @@ const App = {
     const isAdmin = AppStorage.isAdmin();
     const isFixed = AppStorage.isFixedMember();
     const isGuest = AppStorage.isGuest();
+    // Chưa đăng nhập: CSS ẩn ảnh "KH" ở thanh đầu trang và (trên màn hình rộng) nút đăng nhập ở đó, vì thanh bên đã có
+    document.body.classList.toggle('is-guest', !currentUser);
 
     const userAvatarEl = document.getElementById('header-user-avatar');
     const userNameEl = document.getElementById('header-user-name');
@@ -13349,10 +13351,10 @@ const App = {
     });
 
     if (navMembersLabel) {
-      navMembersLabel.innerText = isAdmin ? 'Quản lý thành viên' : (isGuest ? 'Nội quy & Đăng ký' : 'Danh bạ thành viên');
+      navMembersLabel.innerText = isAdmin ? 'Quản lý thành viên' : (isGuest ? 'Nội quy & Quyền lợi' : 'Danh bạ thành viên');
     }
     if (mobileMembersLabel) {
-      mobileMembersLabel.innerText = isAdmin ? 'QL Thành viên' : (isGuest ? 'Nội quy & ĐK' : 'Danh bạ');
+      mobileMembersLabel.innerText = isAdmin ? 'QL Thành viên' : (isGuest ? 'Nội quy CLB' : 'Danh bạ');
     }
 
     const tabMembersTitle = document.querySelector('#tab-members .tab-main-title');
@@ -13376,23 +13378,24 @@ const App = {
       }
 
       if (headerBtnWrapper) {
+        // Thanh đầu trang (chỉ hiện khi thanh bên là ngăn kéo): đúng MỘT nút chính; đăng ký nằm trong hộp thoại
         headerBtnWrapper.innerHTML = `
-          <div class="auth-header-actions">
-            <button class="btn btn-primary btn-sm auth-pill" onclick="App.showAuthModal('login')" title="Đăng nhập tài khoản">
-              <i class="fas fa-sign-in-alt"></i><span>Đăng nhập</span>
-            </button>
-            <button class="btn btn-secondary btn-sm auth-pill auth-pill-secondary" onclick="App.showAuthModal('register')" title="Tạo tài khoản mới">
-              <span>Đăng ký</span>
-            </button>
-          </div>
+          <button class="btn btn-primary btn-sm auth-pill" onclick="App.showAuthModal('login'); event.stopPropagation();" title="Đăng nhập hoặc tạo tài khoản">
+            <i class="fas fa-sign-in-alt"></i><span>Đăng nhập</span>
+          </button>
         `;
       }
 
       if (sidebarBtnWrapper) {
+        // Thanh bên: thẻ khách gọn, một nút chính + liên kết tạo tài khoản
         sidebarBtnWrapper.innerHTML = `
-          <div class="auth-side-actions">
-            <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login')">Đăng nhập</button>
-            <button class="btn btn-secondary btn-sm" onclick="App.showAuthModal('register')">Đăng ký</button>
+          <div class="guest-card">
+            <div class="guest-card-text">
+              <b>Chưa đăng nhập</b>
+              <span>Đăng nhập để bình chọn, đóng quỹ và nhận thông báo.</span>
+            </div>
+            <button class="btn btn-primary btn-sm guest-card-btn" onclick="App.showAuthModal('login')"><i class="fas fa-sign-in-alt"></i> Đăng nhập</button>
+            <button type="button" class="guest-card-link" onclick="App.showAuthModal('register')">Chưa có tài khoản? <b>Đăng ký</b></button>
           </div>
         `;
       }

@@ -48,7 +48,7 @@
 
   <!-- Application Stylesheets -->
   <!-- BUNDLE:CSS:START -->
-  <link rel="stylesheet" href="css/bundle.css?v=8fcd9960da">
+  <link rel="stylesheet" href="css/bundle.css?v=98480ecbb5">
   <!-- BUNDLE:CSS:END -->
 </head>
 <body>
@@ -125,11 +125,7 @@
             </div>
           </div>
         </div>
-        <div id="sidebar-auth-btn-wrapper">
-          <button class="btn btn-primary btn-sm w-full" style="justify-content: center;" onclick="App.showAuthModal('login')">
-            <i class="fas fa-sign-in-alt"></i> Đăng nhập / Đăng ký
-          </button>
-        </div>
+        <div id="sidebar-auth-btn-wrapper"></div>
 
         <!-- Notification Toggle Button -->
         <div id="notif-toggle-sidebar" style="margin-top: 0.5rem;"></div>
@@ -166,19 +162,15 @@
 
           <!-- Current User Profile & Login/Logout in Header -->
           <div class="flex items-center gap-2 sm:gap-3 user-card-clickable" id="header-user-section" onclick="App.handleHeaderUserClick()" title="Hồ sơ người dùng" style="border-left: 1px solid var(--border-color); padding-left: 0.75rem; cursor: pointer; border-radius: var(--radius-md); padding-top: 0.2rem; padding-bottom: 0.2rem;">
-            <div style="position: relative;">
+            <div class="hdr-user-avatar" style="position: relative;">
               <img id="header-user-avatar" class="avatar" src="https://ui-avatars.com/api/?name=Khach&background=64748b&color=fff" alt="Avatar" style="object-fit: cover;">
               <span id="header-user-edit-dot" style="display: none; position: absolute; bottom: -2px; right: -2px; width: 13px; height: 13px; background: var(--primary); color: #fff; border-radius: 50%; font-size: 7px; display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--bg-card);"><i class="fas fa-pen"></i></span>
             </div>
-            <div class="hidden sm:block" style="line-height: 1.2;">
+            <div class="hidden sm:block hdr-user-meta" style="line-height: 1.2;">
               <div id="header-user-name" class="font-bold" style="font-size: 0.88rem;">Khách vãng lai</div>
               <span id="header-user-role" class="badge badge-neutral" style="font-size: 0.68rem; margin-top: 0.15rem;">Chưa đăng nhập</span>
             </div>
-            <div id="header-auth-btn-wrapper">
-              <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login'); event.stopPropagation();" title="Đăng nhập tài khoản" style="padding: 0.4rem 0.65rem;">
-                <i class="fas fa-sign-in-alt"></i> <span class="hidden md:inline">Đăng nhập</span>
-              </button>
-            </div>
+            <div id="header-auth-btn-wrapper"></div>
           </div>
         </div>
       </header>
@@ -1327,7 +1319,7 @@
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
   <!-- BUNDLE:JS:START -->
-  <script src="js/bundle.js?v=6c745fc7d9"></script>
+  <script src="js/bundle.js?v=cb5b8c639d"></script>
   <!-- BUNDLE:JS:END -->
 
 </body>
