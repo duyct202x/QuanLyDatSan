@@ -36,6 +36,11 @@ const App = {
       AutoScheduleModule.init();
     }
 
+    // Thông báo đẩy tới thiết bị (đăng ký thiết bị, nhận tin từ Service Worker)
+    if (window.PushClient) {
+      PushClient.init();
+    }
+
     // Khởi tạo trước ScheduleModule để dữ liệu lịch luôn hiển thị ngay từ lần đầu
     if (window.ScheduleModule) {
       ScheduleModule.init();
@@ -736,17 +741,23 @@ const App = {
 
       if (headerBtnWrapper) {
         headerBtnWrapper.innerHTML = `
-          <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login')" title="Đăng nhập tài khoản" style="padding: 0.4rem 0.65rem;">
-            <i class="fas fa-sign-in-alt"></i> <span class="hidden md:inline">Đăng nhập</span>
-          </button>
+          <div class="auth-header-actions">
+            <button class="btn btn-primary btn-sm auth-pill" onclick="App.showAuthModal('login')" title="Đăng nhập tài khoản">
+              <i class="fas fa-sign-in-alt"></i><span>Đăng nhập</span>
+            </button>
+            <button class="btn btn-secondary btn-sm auth-pill auth-pill-secondary" onclick="App.showAuthModal('register')" title="Tạo tài khoản mới">
+              <span>Đăng ký</span>
+            </button>
+          </div>
         `;
       }
 
       if (sidebarBtnWrapper) {
         sidebarBtnWrapper.innerHTML = `
-          <button class="btn btn-primary btn-sm w-full" style="justify-content: center;" onclick="App.showAuthModal('login')">
-            <i class="fas fa-sign-in-alt"></i> Đăng nhập / Đăng ký
-          </button>
+          <div class="auth-side-actions">
+            <button class="btn btn-primary btn-sm" onclick="App.showAuthModal('login')">Đăng nhập</button>
+            <button class="btn btn-secondary btn-sm" onclick="App.showAuthModal('register')">Đăng ký</button>
+          </div>
         `;
       }
 
@@ -1053,6 +1064,7 @@ const App = {
         </div>
 
         ${window.GoogleAuth ? GoogleAuth.renderProfileSection(user) : ''}
+        ${window.PushClient ? PushClient.renderProfileSection(user) : ''}
 
         <!-- 3. Khu vực Đổi mật khẩu -->
         <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">

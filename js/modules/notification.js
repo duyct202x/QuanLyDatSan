@@ -89,10 +89,12 @@ const NotificationModule = {
       const isEnabled = localStorage.getItem('SMASH_PRO_NOTIF_ENABLED') !== '0';
       if (isEnabled) {
         localStorage.setItem('SMASH_PRO_NOTIF_ENABLED', '0');
+        if (window.PushClient) PushClient.disable();
         App.showToast('🔕 Đã tắt thông báo. Bạn sẽ không nhận nhắc lịch đặt sân.', 'info');
       } else {
         localStorage.setItem('SMASH_PRO_NOTIF_ENABLED', '1');
         App.showToast('🔔 Đã bật lại thông báo lịch đặt sân!', 'success');
+        if (window.PushClient && PushClient.config() && AppStorage.getCurrentUser()) PushClient.enable();
       }
       this.renderNotifToggleBtn();
       return;
@@ -160,6 +162,10 @@ const NotificationModule = {
       if (result === 'granted') {
         localStorage.setItem('SMASH_PRO_NOTIF_ENABLED', '1');
         App.showToast('🔔 Đã bật thông báo! Bạn sẽ nhận nhắc lịch trước 4 tiếng và khi Admin chốt sân.', 'success');
+        // Đã có quyền: đăng ký thiết bị để nhận thông báo đẩy cả khi đóng ứng dụng (nếu CLB đã cấu hình và đã đăng nhập)
+        if (window.PushClient && PushClient.config() && AppStorage.getCurrentUser()) {
+          PushClient.enable().then((r) => { if (!r.success) App.showToast(r.message, 'warning'); });
+        }
         // Gửi thông báo demo để xác nhận
         setTimeout(() => {
           this._showNotification({

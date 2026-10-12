@@ -28,8 +28,11 @@
   <link rel="alternate icon" type="image/png" href="assets/favicon.png">
   <link rel="apple-touch-icon" href="assets/favicon.png">
   <meta name="theme-color" content="#10b981">
+  <link rel="manifest" href="manifest.webmanifest">
 
   <!-- Google Fonts -->
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -38,20 +41,15 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
   <!-- Chart.js for Financial Analytics -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <!-- Canvas Confetti for Payment Success -->
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 
   <!-- Application Stylesheets -->
-  <link rel="stylesheet" href="css/variables.css">
-  <link rel="stylesheet" href="css/base.css">
-  <link rel="stylesheet" href="css/components.css">
-  <link rel="stylesheet" href="css/schedule.css">
-  <link rel="stylesheet" href="css/voting.css">
-  <link rel="stylesheet" href="css/fund.css">
-  <link rel="stylesheet" href="css/utilities.css">
-  <link rel="stylesheet" href="css/responsive.css">
+  <!-- BUNDLE:CSS:START -->
+  <link rel="stylesheet" href="css/bundle.css?v=8fcd9960da">
+  <!-- BUNDLE:CSS:END -->
 </head>
 <body>
 
@@ -445,6 +443,9 @@
             <!-- Dynamically loaded -->
           </div>
 
+          <!-- Mã chuyển khoản riêng của thành viên đang đăng nhập -->
+          <div id="fund-transfer-code-card"></div>
+
           <!-- Dues Filter Tabs & Table -->
           <div class="card">
             <div class="card-header">
@@ -458,6 +459,9 @@
                 <button class="filter-tab fund-filter-tab" data-fund-filter="unpaid" onclick="FundModule.setFilter('unpaid')">Chưa đóng</button>
               </div>
             </div>
+
+            <!-- Đối chiếu biên lai tự động (Ban quản trị) -->
+            <div id="fund-verify-bar"></div>
 
             <div class="table-responsive">
               <table class="table">
@@ -722,40 +726,12 @@
           <!-- SUB-TAB 2: PUBLIC MEMBER REGISTRATION FORM -->
           <div id="subtab-panel-members-reg" style="display: none;">
             <div class="responsive-2col-layout">
-              <!-- Registration Form -->
+              <!-- Thẻ tham gia: Admin = thêm thành viên; người khác = hướng dẫn tạo tài khoản (MembersModule.renderJoinCard) -->
               <div class="card">
                 <div class="card-header">
-                  <h3 class="card-title"><i class="fas fa-id-card text-primary"></i> Phiếu đăng ký gia nhập CLB</h3>
+                  <h3 class="card-title" id="join-card-title"><i class="fas fa-id-card text-primary"></i> Tham gia CLB</h3>
                 </div>
-
-                <form onsubmit="MembersModule.handlePublicMemberRegistration(event)">
-                  <div class="form-group">
-                    <label class="form-label font-bold">Họ và tên thành viên *</label>
-                    <input type="text" id="reg-name" class="form-control" placeholder="VD: Trần Hoàng Nam" required>
-                  </div>
-
-                  <div class="form-group">
-                    <label class="form-label font-bold">Số điện thoại (Zalo) *</label>
-                    <input type="tel" id="reg-phone" class="form-control" placeholder="0988xxxxxx" required>
-                  </div>
-
-                  <div class="form-group">
-                    <label class="form-label font-bold">Hình thức tham gia *</label>
-                    <select id="reg-type" class="form-select">
-                      <option value="fixed" selected>🏸 Thành viên cố định (Góp quỹ tháng - cần Ban quản trị duyệt)</option>
-                      <option value="guest">⚡ Khách vãng lai (Thu theo buổi)</option>
-                    </select>
-                  </div>
-
-                  <div class="form-group">
-                    <label class="form-label">Giới thiệu bản thân / Ghi chú (nếu có)</label>
-                    <textarea id="reg-note" class="form-control" placeholder="VD: Tay vợt tay trái, sở trường đánh lưới, thường rảnh tối T3 và T7..."></textarea>
-                  </div>
-
-                  <button type="submit" class="btn btn-primary w-full btn-lg" style="margin-top: 1rem;">
-                    <i class="fas fa-paper-plane"></i> Gửi đăng ký gia nhập CLB
-                  </button>
-                </form>
+                <div id="join-card-body"></div>
               </div>
 
               <!-- Club Info & Rules for Members -->
@@ -1020,6 +996,44 @@
                   <span id="email-status-line" class="text-secondary" style="font-size: 0.75rem; margin-top: 0.35rem; display: block;"></span>
                 </div>
 
+                <!-- Push Notification Setting -->
+                <div class="form-group" style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;">
+                    <div>
+                      <div class="font-bold" style="font-size: 0.92rem;"><i class="fas fa-bell text-primary"></i> Thông báo đẩy tới thiết bị</div>
+                      <div class="text-secondary" style="font-size: 0.78rem;">Gửi thông báo tới điện thoại/máy tính của thành viên kể cả khi đã đóng ứng dụng. Dùng chung các sự kiện đã chọn ở phần email (mở vote, đặt/hủy sân, nhắc giờ…). Thành viên tự bật trong Hồ sơ cá nhân.</div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="set-push-enabled">
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                  <details style="margin-top: 0.7rem; font-size: 0.8rem;">
+                    <summary class="text-secondary" style="cursor: pointer;">Hướng dẫn thiết lập (làm một lần)</summary>
+                    <ol class="text-secondary" style="padding-left: 1.2rem; margin: 0.5rem 0; line-height: 1.55;">
+                      <li>Vào <b>console.firebase.google.com</b>, tạo dự án (hoặc dùng dự án Google Cloud đã có).</li>
+                      <li><b>Project settings → General → Your apps</b>: thêm ứng dụng <b>Web</b>, sao chép đoạn <code>firebaseConfig</code> và dán vào ô bên dưới.</li>
+                      <li><b>Project settings → Cloud Messaging → Web Push certificates</b>: tạo cặp khóa, dán <b>khóa công khai</b> vào ô "Khóa VAPID".</li>
+                      <li><b>Project settings → Service accounts → Generate new private key</b>: mở tệp JSON, sao chép TOÀN BỘ nội dung, vào Apps Script → <b>Project Settings → Script properties</b>, thêm thuộc tính <code>FCM_SERVICE_ACCOUNT</code> với giá trị là nội dung đó. <b>Không dán khóa này vào ứng dụng hay gửi cho ai.</b></li>
+                      <li>Bật <b>Firebase Cloud Messaging API</b> cho dự án nếu được yêu cầu, rồi bấm "Kiểm tra" bên dưới.</li>
+                    </ol>
+                    <span class="text-secondary">Tên menu có thể khác đôi chút tùy phiên bản giao diện Firebase.</span>
+                  </details>
+                  <textarea id="set-push-snippet" class="form-control" rows="2" style="margin-top: 0.6rem; font-family: monospace; font-size: 0.78rem;" placeholder="Dán đoạn firebaseConfig từ Firebase vào đây để tự điền các ô bên dưới…" oninput="SettingsModule.parseFirebaseConfig(this.value)"></textarea>
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem 0.75rem; margin-top: 0.6rem;">
+                    <div><label class="form-label" style="font-size: 0.75rem;" for="set-push-apikey">API key</label><input type="text" id="set-push-apikey" class="form-control" autocomplete="off" spellcheck="false"></div>
+                    <div><label class="form-label" style="font-size: 0.75rem;" for="set-push-projectid">Project ID</label><input type="text" id="set-push-projectid" class="form-control" autocomplete="off" spellcheck="false"></div>
+                    <div><label class="form-label" style="font-size: 0.75rem;" for="set-push-senderid">Messaging sender ID</label><input type="text" id="set-push-senderid" class="form-control" autocomplete="off" spellcheck="false"></div>
+                    <div><label class="form-label" style="font-size: 0.75rem;" for="set-push-appid">App ID</label><input type="text" id="set-push-appid" class="form-control" autocomplete="off" spellcheck="false"></div>
+                    <div style="grid-column: 1 / -1;"><label class="form-label" style="font-size: 0.75rem;" for="set-push-vapid">Khóa VAPID (khóa công khai Web Push)</label><input type="text" id="set-push-vapid" class="form-control" autocomplete="off" spellcheck="false"></div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="SettingsModule.refreshPushStatus()"><i class="fas fa-sync-alt"></i> Kiểm tra</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="PushClient.sendTest()"><i class="fas fa-paper-plane"></i> Gửi thử tới thiết bị của tôi</button>
+                  </div>
+                  <span id="push-status-line" class="text-secondary" style="font-size: 0.75rem; margin-top: 0.35rem; display: block;"></span>
+                </div>
+
                 <!-- Auto Approve Setting -->
                 <div class="form-group" style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
                   <div>
@@ -1190,134 +1204,106 @@
 
   <!-- Auth Modal & Welcome Overlay (Login / Register) -->
   <div class="auth-overlay" id="auth-modal-overlay" onclick="if(event.target.id === 'auth-modal-overlay') App.closeAuthModal()">
-    <div class="auth-card" style="position: relative;">
+    <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
       <button type="button" class="auth-close-btn" onclick="App.closeAuthModal()" aria-label="Đóng cửa sổ" title="Đóng cửa sổ">
         <i class="fas fa-times"></i>
       </button>
-      <div class="auth-header" style="padding: 1.25rem 1.5rem 0.75rem;">
-        <div class="flex items-center justify-center gap-2" style="margin-bottom: 0.25rem;">
-          <div class="stat-icon" style="width: 32px; height: 32px; font-size: 1rem; background: var(--primary); color: #fff; border-radius: var(--radius-sm);">
-            <i class="fas fa-feather-alt"></i>
-          </div>
-          <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-main); margin: 0;">SMASH PRO</h2>
+      <div class="auth-header">
+        <div class="auth-brand">
+          <span class="auth-brand-logo"><i class="fas fa-feather-alt"></i></span>
+          <h2 id="auth-title">SMASH PRO</h2>
         </div>
-
-        <!-- Tab Switcher: Login / Register -->
-        <div class="auth-tabs" style="margin-top: 0.75rem;">
-          <button type="button" class="auth-tab-btn active" id="auth-tab-login" onclick="App.switchAuthTab('login')">
-            <i class="fas fa-sign-in-alt"></i> Đăng nhập
-          </button>
-          <button type="button" class="auth-tab-btn" id="auth-tab-register" onclick="App.switchAuthTab('register')">
-            <i class="fas fa-user-plus"></i> Đăng ký
-          </button>
+        <!-- Chuyển đổi: Đăng nhập / Đăng ký -->
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab-btn active" id="auth-tab-login" onclick="App.switchAuthTab('login')">Đăng nhập</button>
+          <button type="button" class="auth-tab-btn" id="auth-tab-register" onclick="App.switchAuthTab('register')">Đăng ký</button>
         </div>
       </div>
 
-      <div class="auth-body" style="padding: 1.25rem 1.5rem;">
+      <div class="auth-body">
         <!-- FORM 1: ĐĂNG NHẬP -->
         <form id="auth-login-form" onsubmit="App.handleLogin(event)" method="POST" autocomplete="on">
-          <div class="form-group">
-            <label class="form-label" for="auth-login-username">Tài khoản</label>
+          <label class="auth-label" for="auth-login-username">Tài khoản</label>
+          <div class="auth-field">
+            <i class="fas fa-user"></i>
             <input type="text" id="auth-login-username" name="username" class="form-control" autocomplete="username" placeholder="Số điện thoại hoặc tên đăng nhập" required>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="auth-login-password">Mật khẩu</label>
-            <div style="position: relative;">
-              <input type="password" id="auth-login-password" name="password" class="form-control" autocomplete="current-password" placeholder="Mật khẩu" required style="padding-right: 2.5rem;">
-              <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-login-password', this)" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer;" aria-label="Hiện mật khẩu">
-                <i class="fas fa-eye"></i>
-              </button>
-            </div>
+          <label class="auth-label" for="auth-login-password">Mật khẩu</label>
+          <div class="auth-field">
+            <i class="fas fa-lock"></i>
+            <input type="password" id="auth-login-password" name="password" class="form-control" autocomplete="current-password" placeholder="Mật khẩu" required>
+            <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-login-password', this)" aria-label="Hiện mật khẩu"><i class="fas fa-eye"></i></button>
           </div>
 
-          <div class="flex items-center justify-between" style="margin-bottom: 1rem;">
-            <label class="flex items-center gap-2" style="font-size: 0.85rem; cursor: pointer; color: var(--text-secondary);">
-              <input type="checkbox" id="auth-login-remember" name="remember" checked style="accent-color: var(--primary);">
-              <span>Ghi nhớ đăng nhập</span>
-            </label>
-          </div>
+          <label class="auth-check">
+            <input type="checkbox" id="auth-login-remember" name="remember" checked>
+            <span>Ghi nhớ đăng nhập</span>
+          </label>
 
-          <button type="submit" class="btn btn-primary w-full btn-lg" style="justify-content: center;">
-            <i class="fas fa-sign-in-alt"></i> Đăng nhập
-          </button>
-          <div data-google-wrap style="margin-top: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.75rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
-              <span style="flex: 1; height: 1px; background: var(--border-color);"></span>hoặc<span style="flex: 1; height: 1px; background: var(--border-color);"></span>
-            </div>
-            <div id="google-login-btn" style="display: flex; justify-content: center; min-height: 44px;"></div>
+          <button type="submit" class="btn btn-primary auth-submit">Đăng nhập</button>
+          <div data-google-wrap class="auth-google">
+            <div class="auth-divider"><span>hoặc</span></div>
+            <div id="google-login-btn" class="auth-google-btn"></div>
           </div>
+          <p class="auth-switch">Chưa có tài khoản? <button type="button" onclick="App.switchAuthTab('register')">Đăng ký</button></p>
         </form>
 
         <!-- FORM 2: TẠO TÀI KHOẢN MỚI -->
         <form id="auth-register-form" onsubmit="App.handleRegister(event)" method="POST" autocomplete="on" style="display: none;">
-          <div class="form-group">
-            <label class="form-label" for="auth-reg-name">Họ và tên *</label>
-            <input type="text" id="auth-reg-name" name="name" class="form-control" autocomplete="name" placeholder="Nguyễn Văn A" required>
+          <label class="auth-label" for="auth-reg-name">Họ và tên</label>
+          <div class="auth-field">
+            <i class="fas fa-id-card"></i>
+            <input type="text" id="auth-reg-name" name="name" class="form-control" autocomplete="name" placeholder="Nguyễn Văn A" maxlength="100" required>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="auth-reg-account">Số điện thoại hoặc Tên đăng nhập *</label>
-            <input type="text" id="auth-reg-account" name="username" class="form-control" autocomplete="username" placeholder="Ví dụ: 0912345678 hoặc vanlong" required>
+          <label class="auth-label" for="auth-reg-account">Số điện thoại hoặc tên đăng nhập</label>
+          <div class="auth-field">
+            <i class="fas fa-mobile-alt"></i>
+            <input type="text" id="auth-reg-account" name="username" class="form-control" autocomplete="username" placeholder="0912345678 hoặc vanlong" required>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="auth-reg-password">Mật khẩu *</label>
-            <div style="position: relative;">
-              <input type="password" id="auth-reg-password" name="new-password" class="form-control" autocomplete="new-password" placeholder="Tối thiểu 6 ký tự" required style="padding-right: 2.5rem;" oninput="App.validatePasswordPolicy()">
-              <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-reg-password', this)" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer;" aria-label="Hiện mật khẩu">
-                <i class="fas fa-eye"></i>
-              </button>
-            </div>
-            <!-- Ghi chú thông báo cụ thể về quy định đặt mật khẩu -->
-            <div class="pwd-rules-box" id="auth-pwd-rules-box">
-              <div class="pwd-rules-title">
-                <i class="fas fa-shield-alt" style="color: var(--primary);"></i> Quy định đặt mật khẩu:
-              </div>
-              <div class="pwd-indicator" id="pwd-len-check">
-                <i class="fas fa-circle-notch"></i> Tối thiểu từ 6 ký tự trở lên
-              </div>
-              <div class="pwd-indicator" id="pwd-space-check">
-                <i class="fas fa-circle-notch"></i> Không chứa khoảng trắng (dấu cách)
-              </div>
-            </div>
+          <label class="auth-label" for="auth-reg-password">Mật khẩu</label>
+          <div class="auth-field">
+            <i class="fas fa-lock"></i>
+            <input type="password" id="auth-reg-password" name="new-password" class="form-control" autocomplete="new-password" placeholder="Tối thiểu 6 ký tự" required oninput="App.validatePasswordPolicy()">
+            <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-reg-password', this)" aria-label="Hiện mật khẩu"><i class="fas fa-eye"></i></button>
+          </div>
+          <!-- Quy định mật khẩu (một dòng gọn) -->
+          <div class="pwd-rules-box" id="auth-pwd-rules-box">
+            <div class="pwd-rules-title"><i class="fas fa-shield-alt"></i> Quy định đặt mật khẩu:</div>
+            <div class="pwd-indicator" id="pwd-len-check"><i class="fas fa-circle-notch"></i> Từ 6 ký tự</div>
+            <div class="pwd-indicator" id="pwd-space-check"><i class="fas fa-circle-notch"></i> Không có dấu cách</div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="auth-reg-confirm-password">Xác nhận mật khẩu *</label>
-            <div style="position: relative;">
-              <input type="password" id="auth-reg-confirm-password" name="confirm-password" class="form-control" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required style="padding-right: 2.5rem;" oninput="App.validatePasswordPolicy()">
-              <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-reg-confirm-password', this)" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer;" aria-label="Hiện mật khẩu">
-                <i class="fas fa-eye"></i>
-              </button>
-            </div>
-            <div id="auth-pwd-match-text" style="font-size: 0.78rem; margin-top: 0.35rem;"></div>
+          <label class="auth-label" for="auth-reg-confirm-password">Nhập lại mật khẩu</label>
+          <div class="auth-field">
+            <i class="fas fa-lock"></i>
+            <input type="password" id="auth-reg-confirm-password" name="confirm-password" class="form-control" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required oninput="App.validatePasswordPolicy()">
+            <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-reg-confirm-password', this)" aria-label="Hiện mật khẩu"><i class="fas fa-eye"></i></button>
           </div>
+          <div id="auth-pwd-match-text" class="auth-match"></div>
 
-          <div class="form-group">
-            <label class="form-label" for="auth-reg-member-type">Loại hình</label>
+          <label class="auth-label" for="auth-reg-member-type">Loại hình tham gia</label>
+          <div class="auth-field">
+            <i class="fas fa-users"></i>
             <select id="auth-reg-member-type" class="form-select">
-              <option value="fixed" selected>Thành viên cố định (cần Ban quản trị duyệt)</option>
-              <option value="guest">Khách vãng lai</option>
+              <option value="fixed" selected>🏸 Cố định (chờ duyệt)</option>
+              <option value="guest">⚡ Khách vãng lai</option>
             </select>
           </div>
 
-          <div class="flex items-center justify-between" style="margin-bottom: 1rem;">
-            <label class="flex items-center gap-2" style="font-size: 0.85rem; cursor: pointer; color: var(--text-secondary);">
-              <input type="checkbox" id="auth-reg-remember" name="remember" checked style="accent-color: var(--primary);">
-              <span>Ghi nhớ đăng nhập</span>
-            </label>
-          </div>
+          <label class="auth-check">
+            <input type="checkbox" id="auth-reg-remember" name="remember" checked>
+            <span>Ghi nhớ đăng nhập</span>
+          </label>
 
-          <button type="submit" class="btn btn-success w-full btn-lg" style="justify-content: center;">
-            <i class="fas fa-user-plus"></i> Đăng ký
-          </button>
-          <div data-google-wrap style="margin-top: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.75rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
-              <span style="flex: 1; height: 1px; background: var(--border-color);"></span>hoặc<span style="flex: 1; height: 1px; background: var(--border-color);"></span>
-            </div>
-            <div id="google-register-btn" style="display: flex; justify-content: center; min-height: 44px;"></div>
+          <button type="submit" class="btn btn-primary auth-submit">Tạo tài khoản</button>
+          <div data-google-wrap class="auth-google">
+            <div class="auth-divider"><span>hoặc</span></div>
+            <div id="google-register-btn" class="auth-google-btn"></div>
           </div>
+          <p class="auth-switch">Đã có tài khoản? <button type="button" onclick="App.switchAuthTab('login')">Đăng nhập</button></p>
         </form>
       </div>
     </div>
@@ -1340,26 +1326,9 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
-  <script src="js/data.js?v=2.11.0"></script>
-  <script src="js/sync-core.js?v=2.11.0"></script>
-  <script src="js/auth-core.js?v=2.11.0"></script>
-  <script src="js/vote-plan.js?v=2.11.0"></script>
-  <script src="js/local-db.js?v=2.11.0"></script>
-  <script src="js/storage.js?v=2.11.0"></script>
-  <script src="js/html-safe.js?v=2.11.0"></script>
-  <script src="js/modules/members.js?v=2.11.0"></script>
-  <script src="js/modules/schedule.js?v=2.11.0"></script>
-  <script src="js/modules/voting.js?v=2.11.0"></script>
-  <script src="js/modules/vote-scheduler.js?v=2.11.0"></script>
-  <script src="js/modules/membership.js?v=2.11.0"></script>
-  <script src="js/modules/auto-schedule.js?v=2.11.0"></script>
-  <script src="js/modules/google-auth.js?v=2.11.0"></script>
-  <script src="js/modules/fund.js?v=2.11.0"></script>
-  <script src="js/modules/cashbook.js?v=2.11.0"></script>
-  <script src="js/modules/bill-splitter.js?v=2.11.0"></script>
-  <script src="js/modules/settings.js?v=2.11.0"></script>
-  <script src="js/modules/notification.js?v=2.11.0"></script>
-  <script src="js/app.js?v=2.11.0"></script>
+  <!-- BUNDLE:JS:START -->
+  <script src="js/bundle.js?v=6c745fc7d9"></script>
+  <!-- BUNDLE:JS:END -->
 
 </body>
 </html>

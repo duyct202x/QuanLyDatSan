@@ -47,6 +47,14 @@ const SettingsModule = {
       this.setValue('set-email-reminder-hours', mail.reminderHours || 4);
       this.setValue('set-email-vote-audience', mail.voteOpenAudience || 'all');
       this.refreshEmailStatus(false);
+      const pushCfg = info.pushConfig || {};
+      setCheck('set-push-enabled', (info.pushNotify || {}).enabled);
+      this.setValue('set-push-apikey', pushCfg.apiKey || '');
+      this.setValue('set-push-projectid', pushCfg.projectId || '');
+      this.setValue('set-push-senderid', pushCfg.messagingSenderId || '');
+      this.setValue('set-push-appid', pushCfg.appId || '');
+      this.setValue('set-push-vapid', pushCfg.vapidKey || '');
+      this.refreshPushStatus();
       this.renderDeviceBackups();
 
       const autoApproveToggle = document.getElementById('set-auto-approve');
@@ -66,6 +74,27 @@ const SettingsModule = {
     }
   },
 
+  // Tách giá trị từ đoạn firebaseConfig dán vào (apiKey, projectId, messagingSenderId, appId) để điền các ô
+  parseFirebaseConfig(text) {
+    const pick = (k) => { const m = new RegExp(k + '\\s*[:=]\\s*["\']([^"\']+)["\']').exec(text || ''); return m ? m[1].trim() : ''; };
+    const map = { 'set-push-apikey': 'apiKey', 'set-push-projectid': 'projectId', 'set-push-senderid': 'messagingSenderId', 'set-push-appid': 'appId' };
+    Object.keys(map).forEach((id) => { const v = pick(map[id]); if (v) this.setValue(id, v); });
+  },
+
+  // Trạng thái thông báo đẩy: đã cấu hình khóa trên máy chủ chưa, bao nhiêu người/thiết bị đã đăng ký
+  async refreshPushStatus() {
+    const line = document.getElementById('push-status-line');
+    if (!line || !AppStorage.isAdmin() || AppStorage.isLocalOnly()) return;
+    line.textContent = 'Đang kiểm tra…';
+    const session = AppStorage._readSession();
+    const res = await AppStorage._authRequest({ action: 'pushStatus', token: session && session.token });
+    if (res.status !== 'ok') { line.textContent = `⚠️ ${res.message || 'Không kiểm tra được.'}`; return; }
+    const keyOk = res.configured
+      ? '✅ Máy chủ đã có khóa Firebase.'
+      : '⚠️ Máy chủ CHƯA có khóa Firebase (Script Properties → FCM_SERVICE_ACCOUNT) nên chưa gửi được.';
+    line.textContent = `${keyOk} Đã đăng ký: ${res.subscribers || 0} người / ${res.devices || 0} thiết bị.${res.enabled ? '' : ' (CLB đang tắt thông báo đẩy)'}`;
+  },
+
   // Trạng thái trình gửi email trên Apps Script; enable=true thì bật nếu chưa bật
   async refreshEmailStatus(enable) {
     const line = document.getElementById('email-status-line');
@@ -79,7 +108,7 @@ const SettingsModule = {
     const res = await AppStorage.emailAction('emailSetup', { enable: !!enable });
     if (res.status === 'ok') {
       line.textContent = res.installed
-        ? `✅ Trình gửi email đang hoạt động (kiểm tra 10 phút/lần). Hạn mức còn lại hôm nay: ${res.quota} email.`
+        ? `✅ Trình gửi thông báo đang hoạt động (kiểm tra 5 phút/lần). Hạn mức email còn lại hôm nay: ${res.quota}.`
         : '⚠️ Trình gửi email chưa bật. Bấm "Lưu cài đặt" để bật.';
     } else {
       line.textContent = `⚠️ ${res.message || 'Không kiểm tra được trình gửi email.'}`;
@@ -245,6 +274,17 @@ const SettingsModule = {
       };
     }
 
+    if (document.getElementById('set-push-enabled')) {
+      const pv = (id) => (document.getElementById(id)?.value || '').trim();
+      const safe = (s) => (/^[A-Za-z0-9_:.\-]*$/.test(s) ? s : '');
+      const cfg = { apiKey: safe(pv('set-push-apikey')), projectId: safe(pv('set-push-projectid')), messagingSenderId: safe(pv('set-push-senderid')), appId: safe(pv('set-push-appid')), vapidKey: safe(pv('set-push-vapid')) };
+      const complete = Object.values(cfg).every(Boolean);
+      const want = !!document.getElementById('set-push-enabled').checked;
+      if (want && !complete) App.showToast('Thông báo đẩy cần đủ 5 thông tin cấu hình Firebase (chỉ gồm chữ, số, - _ : .). Đã lưu nhưng chưa bật.', 'warning');
+      data.clubInfo.pushConfig = cfg;
+      data.clubInfo.pushNotify = { enabled: want && complete };
+    }
+
     data.clubInfo.bank.bankId = document.getElementById('set-bank-id').value;
     data.clubInfo.bank.accountNo = document.getElementById('set-bank-account-no').value.trim();
     data.clubInfo.bank.accountName = document.getElementById('set-bank-account-name').value.trim().toUpperCase();
@@ -341,9 +381,6 @@ const SettingsModule = {
     if (window.MembersModule) MembersModule.deleteMember(memberId);
   },
 
-  handlePublicMemberRegistration(e) {
-    if (window.MembersModule) MembersModule.handlePublicMemberRegistration(e);
-  },
 
   renderPublicMemberRoster() {
     if (window.MembersModule) MembersModule.renderPublicMemberRoster();

@@ -116,8 +116,38 @@ const FundModule = {
       `;
     }
 
-    // Render Table
+    // Current month dues data (chỉ lấy của các thành viên cố định thực sự tồn tại)
     this.renderDuesTable(monthDues, members);
+    this.renderMyTransferCard(data);
+    if (window.PaymentVerify) {
+      PaymentVerify.renderBar();
+      if (isAdmin) setTimeout(() => PaymentVerify.autoRun(), 300); // Đối chiếu nền các biên lai chờ duyệt
+    }
+  },
+
+  // Thẻ "Mã chuyển khoản của bạn" cho thành viên cố định đang đăng nhập
+  renderMyTransferCard(data) {
+    const box = document.getElementById('fund-transfer-code-card');
+    if (!box) return;
+    const me = AppStorage.getCurrentUser();
+    const member = me && (data.members || []).find((m) => m.id === me.memberId);
+    if (!member || member.type !== 'fixed') { box.innerHTML = ''; return; }
+    const info = data.clubInfo || {};
+    const code = TransferCode.codeOf(member, data.members);
+    const memo = PaymentMatch.memoFor(info, code, this.currentMonth);
+    box.innerHTML = `
+      <div class="card" style="margin-bottom: 1rem; padding: 0.9rem 1.1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem 1.5rem; flex-wrap: wrap;">
+        <div>
+          <div class="text-secondary" style="font-size: 0.78rem;">Mã chuyển khoản của bạn</div>
+          <div class="font-mono text-warning font-bold" style="font-size: 1.5rem; letter-spacing: 0.1em;">${Safe.html(code)}</div>
+        </div>
+        <div style="font-size: 0.82rem; min-width: 0;">
+          <div class="text-secondary">Nội dung chuyển khoản tháng này</div>
+          <div class="font-mono" style="overflow-wrap: anywhere;">${Safe.html(memo)}
+            <button class="copy-btn" onclick="navigator.clipboard.writeText(${Safe.js(memo)}); App.showToast('Đã sao chép nội dung chuyển khoản!', 'success');" title="Sao chép"><i class="far fa-copy"></i></button>
+          </div>
+        </div>
+      </div>`;
   },
 
   renderDuesTable(monthDues, members) {
@@ -184,6 +214,7 @@ const FundModule = {
                 </div>
                 <div class="text-secondary" style="font-size: 0.78rem;">
                   <i class="fas fa-phone-alt"></i> ${Safe.html(member.phone ? AppStorage.maskPhone(member.phone, member.id) : 'Chưa có SĐT')}
+                  ${canViewDetails ? ` • <span class="font-mono" title="Mã chuyển khoản của thành viên">${Safe.html(TransferCode.codeOf(member, data.members))}</span>` : ''}
                 </div>
               </div>
             </div>
@@ -201,6 +232,7 @@ const FundModule = {
           </td>
           <td>
             ${statusBadge}
+            ${isAdmin && window.PaymentVerify ? `<div style="margin-top: 0.25rem;">${PaymentVerify.badge(due, data.monthlyContributions)}</div>` : ''}
             ${(canViewDetails && due.approvedBy) ? `<div class="text-muted" style="font-size: 0.72rem; margin-top: 0.2rem;">(Duyệt: ${Safe.html(due.approvedBy)})</div>` : ''}
           </td>
           <td>
@@ -483,9 +515,9 @@ const FundModule = {
     const amount = Number(due && due.amount) || defaultMonthlyFee;
     const month = this.currentMonth;
     
-    // Transfer memo standard: CLB SMASH T9 NGUYEN VAN A
-    const memberSlug = (member.name || 'THANH VIEN').toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9]/g, " ");
-    const memo = `CLB ${(info.shortName || 'SMASH').toUpperCase()} T${month.slice(5)} ${memberSlug.split(' ').slice(-2).join(' ')}`.trim();
+    // Nội dung chuyển khoản chuẩn: "<TÊN NGẮN> <MÃ RIÊNG> T<tháng>" - mã riêng giúp biết chính xác ai đã chuyển
+    const transferCode = TransferCode.codeOf(member, data.members);
+    const memo = PaymentMatch.memoFor(info, transferCode, month);
 
     // VietQR quick URL
     const qrUrl = `https://api.vietqr.io/image/${encodeURIComponent(bank.bankId)}-${encodeURIComponent(bank.accountNo)}-compact2.jpg?amount=${amount}&addInfo=${encodeURIComponent(memo)}&accountName=${encodeURIComponent(bank.accountName)}`;
@@ -505,6 +537,11 @@ const FundModule = {
           <div class="vietqr-detail-row">
             <span class="vietqr-detail-label">Thành viên nộp:</span>
             <span class="vietqr-detail-value font-bold">${Safe.html(member.name)}</span>
+          </div>
+
+          <div class="vietqr-detail-row">
+            <span class="vietqr-detail-label">Mã chuyển khoản của bạn:</span>
+            <span class="vietqr-detail-value font-mono text-warning font-bold" style="font-size: 1.1rem; letter-spacing: 0.08em;">${Safe.html(transferCode)}</span>
           </div>
 
           <div class="vietqr-detail-row">
@@ -542,6 +579,9 @@ const FundModule = {
             </span>
           </div>
         </div>
+        <p class="text-secondary" style="font-size: 0.78rem; margin: 0.6rem 0 0;">
+          ⚠️ Quét mã VietQR sẽ tự điền sẵn nội dung. Nếu nhập tay, <b>giữ nguyên mã ${Safe.html(transferCode)}</b> trong nội dung để Ban quản trị nhận ra khoản của bạn.
+        </p>
       </div>
 
       <!-- Proof of payment form -->
@@ -558,8 +598,13 @@ const FundModule = {
         <div class="form-group">
           <label class="form-label">Tải ảnh chụp màn hình biên lai (tùy chọn):</label>
           <input type="file" id="bill-file-input" class="form-control" accept="image/*" onchange="FundModule.handleBillUpload(event)">
+          <small class="text-secondary" style="display: block; margin-top: 0.3rem;">Chụp toàn màn hình biên lai, thấy rõ số tiền, nội dung chuyển khoản, tài khoản nhận và thời gian.</small>
           <div id="bill-preview-container" style="display: none; margin-top: 0.5rem; text-align: center;">
             <img id="bill-preview-img" style="max-height: 140px; border-radius: 8px; border: 1px solid var(--border-color);" src="" alt="Bill preview">
+            <div style="margin-top: 0.5rem;">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="PaymentVerify.previewCheck(${Safe.js(member.id)})" title="Đọc thử ảnh để biết đã đủ rõ chưa (không bắt buộc)"><i class="fas fa-search"></i> Kiểm tra ảnh</button>
+            </div>
+            <div id="bill-check-result" style="margin-top: 0.5rem; font-size: 0.85rem; text-align: left;"></div>
           </div>
         </div>
 
@@ -582,11 +627,11 @@ const FundModule = {
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        // Nén ảnh biên lai (tối đa 1280px, JPEG 0.7 ~ 100-250KB) trước khi lưu vào CSDL đồng bộ
+        // Nén ảnh biên lai (rộng tối đa 1100px, cao tối đa 2600px, JPEG 0.72) trước khi lưu vào CSDL đồng bộ.
+        // Giới hạn theo chiều rộng (không theo cạnh dài) để ảnh chụp màn hình điện thoại vẫn đủ nét cho việc đọc chữ.
         const img = new Image();
         img.onload = () => {
-          const MAX_SIZE = 1280;
-          const scale = Math.min(1, MAX_SIZE / Math.max(img.width, img.height));
+          const scale = Math.min(1, 1100 / img.width, 2600 / img.height);
           const canvas = document.createElement('canvas');
           canvas.width = Math.round(img.width * scale);
           canvas.height = Math.round(img.height * scale);
@@ -594,8 +639,10 @@ const FundModule = {
           const previewImg = document.getElementById('bill-preview-img');
           const container = document.getElementById('bill-preview-container');
           if (previewImg && container) {
-            previewImg.src = canvas.toDataURL('image/jpeg', 0.7);
+            previewImg.src = canvas.toDataURL('image/jpeg', 0.72);
             container.style.display = 'block';
+            const checkBox = document.getElementById('bill-check-result');
+            if (checkBox) checkBox.innerHTML = '';
           }
         };
         img.src = event.target.result;

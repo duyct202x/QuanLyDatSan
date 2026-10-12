@@ -157,6 +157,7 @@ const MembersModule = {
                   ${isFixed ? '🏸 Cố định' : '⚡ Vãng lai'}
                 </span>
                 ${!isFixed && window.MembershipModule && MembershipModule.isPendingMember(m, data) ? `<span class="badge badge-info" style="font-size: 0.62rem; padding: 0.1rem 0.4rem;">⏳ Chờ duyệt cố định</span>` : ''}
+                ${isAdmin && !(data.users || []).some(u => u.memberId === m.id || (m.username && u.username === m.username)) ? `<span class="badge badge-neutral" style="font-size: 0.62rem; padding: 0.1rem 0.4rem;" title="Chỉ được ghi tên, chưa có tài khoản đăng nhập"><i class="fas fa-user-slash"></i> Chưa có tài khoản</span>` : ''}
               </div>
             </div>
 
@@ -165,7 +166,7 @@ const MembersModule = {
               <div class="flex items-center justify-between">
                 <span class="text-secondary"><i class="fas fa-phone-alt text-primary"></i> SĐT / Zalo:</span>
                 <div class="flex items-center gap-2">
-                  ${canViewContact ? `
+                  ${canViewContact && !m.phone ? `<span class="text-muted" style="font-size: 0.78rem;">Chưa có SĐT</span>` : canViewContact ? `
                     <a href="tel:${Safe.html(m.phone)}" class="font-mono font-bold" style="color: var(--text-main); text-decoration: none;" title="Bấm để gọi">${Safe.html(m.phone)}</a>
                     ${cleanPhone ? `<a href="https://zalo.me/${cleanPhone}" target="_blank" rel="noopener" class="badge badge-info" style="font-size: 0.65rem; padding: 0.1rem 0.35rem;" title="Mở Zalo"><i class="fas fa-comment-dots"></i> Zalo</a>` : ''}
                   ` : `
@@ -174,6 +175,13 @@ const MembersModule = {
                   `}
                 </div>
               </div>
+
+              ${isFixed && (isAdmin || isSelf) ? `
+                <div class="flex items-center justify-between" style="border-top: 1px dashed var(--border-color); padding-top: 0.35rem; margin-top: 0.1rem;">
+                  <span class="text-secondary"><i class="fas fa-hashtag text-primary"></i> Mã chuyển khoản:</span>
+                  <span class="font-mono font-bold" style="letter-spacing: 0.08em;">${Safe.html(window.TransferCode ? TransferCode.codeOf(m, members) : '')}</span>
+                </div>
+              ` : ''}
 
               ${isFixed ? `
                 <div class="flex items-center justify-between" style="border-top: 1px dashed var(--border-color); padding-top: 0.35rem; margin-top: 0.1rem;">
@@ -210,9 +218,9 @@ const MembersModule = {
                     <i class="fas fa-comment-dots text-primary"></i> <span>Zalo</span>
                   </a>
                 ` : ''}
-                <a href="tel:${Safe.html(m.phone)}" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;" title="Gọi điện thoại">
+                ${m.phone ? `<a href="tel:${Safe.html(m.phone)}" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;" title="Gọi điện thoại">
                   <i class="fas fa-phone-alt"></i>
-                </a>
+                </a>` : ''}
               ` : `
                 <span class="text-muted" style="font-size: 0.75rem; display: inline-flex; align-items: center; gap: 0.35rem;">
                   <i class="fas fa-user-shield text-primary"></i> <span>Bảo mật riêng tư</span>
@@ -305,8 +313,9 @@ const MembersModule = {
       if (panelList) panelList.style.display = 'none';
       if (panelReg) panelReg.style.display = 'block';
       this.renderBenefitsAndRules();
+      this.renderJoinCard();
       this.renderPublicMemberRoster();
-      setTimeout(() => document.getElementById('reg-name')?.focus(), 100);
+      setTimeout(() => document.getElementById('quick-mem-name')?.focus(), 100);
     }
   },
 
@@ -331,8 +340,8 @@ const MembersModule = {
 
         <div style="grid-template-columns: 1fr 1fr; gap: 1rem; display: grid;">
           <div class="form-group">
-            <label class="form-label font-bold">Số điện thoại (Zalo) *</label>
-            <input type="tel" id="new-mem-phone" class="form-control" placeholder="0912345678" required>
+            <label class="form-label font-bold">Số điện thoại (Zalo)</label>
+            <input type="tel" id="new-mem-phone" class="form-control" placeholder="0912345678">
           </div>
           <div class="form-group">
             <label class="form-label">Email liên hệ (tùy chọn)</label>
@@ -364,10 +373,15 @@ const MembersModule = {
         </div>
 
         <div class="form-group" style="background: var(--bg-input); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-          <label class="form-label" style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem;">
-            <i class="fas fa-key text-primary"></i> Mật khẩu đăng nhập tài khoản (tùy chọn):
+          <label class="flex items-center gap-2" style="font-size: 0.85rem; font-weight: 600; cursor: pointer;">
+            <input type="checkbox" id="new-mem-account" onchange="document.getElementById('new-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <span><i class="fas fa-key text-primary"></i> Tạo luôn tài khoản đăng nhập</span>
           </label>
-          <input type="password" id="new-mem-password" class="form-control" placeholder="Để trống tự động lấy theo SĐT hoặc 123456...">
+          <div id="new-mem-pwd-wrap" style="display: none; margin-top: 0.5rem;">
+            <input type="password" id="new-mem-password" class="form-control" autocomplete="new-password" placeholder="Mật khẩu ban đầu (tối thiểu 6 ký tự, không đoán được)">
+            <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.25rem;">Gửi mật khẩu này cho thành viên; họ nên đổi ngay sau khi đăng nhập. Không đặt trùng SĐT hay 123456.</span>
+          </div>
+          <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.35rem;">Không tích: chỉ ghi tên (không có tài khoản).</span>
         </div>
 
         <div class="modal-footer" style="padding: 1rem 0 0 0;">
@@ -382,104 +396,21 @@ const MembersModule = {
 
   saveNewMember(e) {
     if (e && e.preventDefault) e.preventDefault();
-    const data = AppStorage.loadData();
-    const name = (document.getElementById('new-mem-name')?.value || '').trim();
-    const phone = (document.getElementById('new-mem-phone')?.value || '').trim();
-    const email = (document.getElementById('new-mem-email')?.value || '').trim();
-    const note = (document.getElementById('new-mem-note')?.value || '').trim();
-    const type = document.getElementById('new-mem-type')?.value || 'fixed';
-    const role = document.getElementById('new-mem-role')?.value || 'member';
-    const customPwd = (document.getElementById('new-mem-password')?.value || '').trim();
-    const avatar = document.getElementById('add-mem-avatar-val')?.value || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=10b981&color=fff`;
-    const cleanPhone = phone.replace(/\D/g, '');
-
-    if (!name || !phone) {
-      App.showToast("Vui lòng điền đầy đủ Họ tên và Số điện thoại!", "warning");
+    const v = (id) => (document.getElementById(id)?.value || '').trim();
+    const name = v('new-mem-name');
+    const res = this.createMember({
+      name, phone: v('new-mem-phone'), email: v('new-mem-email'), note: v('new-mem-note'),
+      type: v('new-mem-type') || 'fixed', role: v('new-mem-role') || 'member',
+      avatar: document.getElementById('add-mem-avatar-val')?.value || '',
+      createAccount: !!document.getElementById('new-mem-account')?.checked, password: v('new-mem-password')
+    });
+    if (!res.success) {
+      App.showToast(res.message, 'warning');
       return;
     }
-
-    // Kiểm tra trùng SĐT
-    if ((data.members || []).some(m => m.phone && m.phone.replace(/\D/g, '') === cleanPhone)) {
-      App.showToast("Số điện thoại này đã tồn tại trong danh sách thành viên!", "warning");
-      return;
-    }
-
-    const newMemId = "mem_" + Date.now();
-    const newUserId = "user_" + Date.now();
-    const username = (cleanPhone && cleanPhone.length >= 9) ? cleanPhone : (name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '') + Math.floor(100 + Math.random() * 900));
-    const finalPassword = customPwd || ((cleanPhone && cleanPhone.length >= 6) ? cleanPhone : '123456');
-
-    const newMem = {
-      id: newMemId,
-      username,
-      name,
-      phone,
-      email,
-      note,
-      type,
-      role,
-      avatar,
-      joinDate: new Date().toISOString().slice(0, 10)
-    };
-
-    const newUser = {
-      id: newUserId,
-      username,
-      password: AppStorage.hashPassword(finalPassword),
-      name,
-      phone,
-      email,
-      note,
-      role,
-      memberId: newMemId,
-      type,
-      avatar,
-      createdAt: new Date().toISOString()
-    };
-
-    if (!data.members) data.members = [];
-    if (!data.users) data.users = [];
-
-    data.members.push(newMem);
-    const existUserIdx = data.users.findIndex(u => u.username === username || (cleanPhone && u.phone && u.phone.replace(/\D/g, '') === cleanPhone));
-    if (existUserIdx >= 0) {
-      data.users[existUserIdx] = { ...data.users[existUserIdx], ...newUser };
-    } else {
-      data.users.push(newUser);
-    }
-
-    // Nếu là thành viên cố định -> Tạo phiếu thu quỹ tháng hiện tại
-    const memberFee = Number(data.clubInfo.monthlyFee || data.clubInfo.monthlyFundFee) || 0;
-    if (type === 'fixed' && memberFee > 0) {
-      const currentMonth = AppStorage.currentMonth();
-      if (!data.monthlyContributions) data.monthlyContributions = [];
-      if (!data.monthlyContributions.some(d => d.memberId === newMemId && d.month === currentMonth)) {
-        data.monthlyContributions.push({
-          id: `due_${currentMonth}_${newMemId}`,
-          month: currentMonth,
-          memberId: newMemId,
-          amount: memberFee,
-          status: 'unpaid',
-          paidAt: null,
-          method: null,
-          billImage: null,
-          approvedBy: null,
-          approvedAt: null,
-          note: 'Thành viên mới'
-        });
-      }
-    }
-
-    AppStorage.saveData(data, true);
     App.closeModal();
-    App.showToast(`🎉 Đã thêm thành viên "${name}" thành công! (Tên đăng nhập: ${username})`, "success");
-
-    this.renderMembersTab();
-    if (window.SettingsModule) SettingsModule.renderMembersAdmin();
-    App.renderUserRoleSelector();
-    App.renderUserHeaderAndSidebar();
-    if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
-    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+    App.showToast(`🎉 Đã thêm thành viên "${name}"${res.username ? ` (tên đăng nhập: ${res.username})` : ' (chưa có tài khoản)'}!`, 'success');
+    this.afterMemberChange();
   },
 
   openEditMemberModal(memberId) {
@@ -548,11 +479,11 @@ const MembersModule = {
 
         <div class="form-group" style="background: var(--bg-input); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 0.5rem;">
           <label class="form-label" style="font-weight: 600; margin-bottom: 0.25rem;">
-            <i class="fas fa-key text-primary"></i> Đặt lại mật khẩu thành viên:
+            <i class="fas fa-key text-primary"></i> ${user.username ? 'Đặt lại mật khẩu thành viên:' : 'Cấp tài khoản đăng nhập (đặt mật khẩu):'}
           </label>
           <input type="password" id="edit-mem-password" class="form-control" placeholder="Nhập mật khẩu mới nếu muốn thay đổi (tối thiểu 6 ký tự)...">
           <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
-            Để trống nếu muốn giữ nguyên mật khẩu hiện tại của thành viên này.
+            ${user.username ? 'Để trống nếu muốn giữ nguyên mật khẩu hiện tại của thành viên này.' : 'Thành viên này chưa có tài khoản. Nhập mật khẩu (cần có SĐT làm tên đăng nhập) để cấp tài khoản; để trống nếu không cần.'}
           </span>
         </div>
 
@@ -590,6 +521,31 @@ const MembersModule = {
       (u.phone && m.phone && u.phone.replace(/\D/g, '') === m.phone.replace(/\D/g, '')) ||
       (m.id === 'mem_admin' && u.username === 'admin')
     );
+
+    if (!user && newPwd) {
+      // Thành viên mới chỉ được ghi tên: cấp tài khoản đăng nhập khi Admin đặt mật khẩu
+      const policy = AppStorage._passwordPolicyError(newPwd);
+      const uname = ((m.phone || '').replace(/\D/g, '').length >= 9) ? (m.phone || '').replace(/\D/g, '') : (m.username || '');
+      if (policy || !uname) {
+        App.showToast(policy || 'Thành viên chưa có SĐT để làm tên đăng nhập. Hãy nhập SĐT trước.', 'error');
+        return;
+      }
+      if (AuthCore.isWeakPassword(newPwd, { username: uname, phone: m.phone })) {
+        App.showToast('Mật khẩu quá dễ đoán (trùng SĐT/tên đăng nhập hoặc mật khẩu phổ biến). Hãy đặt mật khẩu khác.', 'error');
+        return;
+      }
+      if ((data.users || []).some(u => (u.username || '').toLowerCase() === uname.toLowerCase())) {
+        App.showToast(`Tên đăng nhập "${uname}" đã tồn tại.`, 'error');
+        return;
+      }
+      m.username = uname;
+      if (!data.users) data.users = [];
+      data.users.push({
+        id: 'user_' + Date.now(), username: uname, password: AppStorage.hashPassword(newPwd), name: m.name, phone: m.phone,
+        email: m.email, note: m.note, role: m.role, memberId: m.id, type: m.type, avatar: m.avatar || avatar, createdAt: new Date().toISOString()
+      });
+      App.showToast(`Đã cấp tài khoản đăng nhập "${uname}" cho ${m.name}.`, 'success');
+    }
 
     if (user) {
       user.name = m.name;
@@ -690,51 +646,159 @@ const MembersModule = {
     App.showToast(`Đã xóa thành viên "${memberName}" khỏi danh sách CLB!`, "info");
   },
 
-  async handlePublicMemberRegistration(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    const data = AppStorage.loadData();
-    const name = (document.getElementById('reg-name')?.value || '').trim();
-    const phone = (document.getElementById('reg-phone')?.value || '').trim();
-    const type = document.getElementById('reg-type')?.value || 'fixed';
-    const note = (document.getElementById('reg-note')?.value || '').trim();
+  // ---------------- Thẻ "Tham gia CLB" ở tab Điều khoản ----------------
+  // Admin/Thủ quỹ: form thêm nhanh thành viên (có thể KHÔNG tạo tài khoản đăng nhập, dành cho khách/người chưa dùng app).
+  // Người khác: hướng dẫn tạo tài khoản (đăng ký dùng chung một luồng ở hộp thoại Đăng nhập/Đăng ký).
+  renderJoinCard() {
+    const body = document.getElementById('join-card-body');
+    if (!body) return;
+    const isAdmin = AppStorage.isAdmin();
+    const title = document.getElementById('join-card-title');
+    const tabBtn = document.getElementById('subtab-btn-members-reg');
+    if (tabBtn) tabBtn.innerHTML = isAdmin ? '<i class="fas fa-user-plus"></i> Thêm thành viên' : '<i class="fas fa-id-card"></i> Điều khoản & Đăng ký';
+    if (title) title.innerHTML = isAdmin ? '<i class="fas fa-user-plus text-primary"></i> Thêm thành viên' : '<i class="fas fa-id-card text-primary"></i> Tham gia CLB';
+
+    if (isAdmin) {
+      body.innerHTML = `
+        <form onsubmit="MembersModule.addMemberQuick(event)">
+          <p class="text-secondary" style="font-size: 0.82rem; margin: 0 0 0.9rem;">
+            Ghi tên khách hoặc thành viên <b>chưa có tài khoản</b> để tính quỹ, chia tiền, điểm danh. Mỗi người được cấp một <b>mã chuyển khoản riêng</b>.
+          </p>
+          <div class="form-group">
+            <label class="form-label font-bold" for="quick-mem-name">Họ và tên *</label>
+            <input type="text" id="quick-mem-name" class="form-control" placeholder="VD: Trần Hoàng Nam" maxlength="100" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="quick-mem-phone">Số điện thoại / Zalo (tùy chọn)</label>
+            <input type="tel" id="quick-mem-phone" class="form-control" placeholder="0988xxxxxx">
+          </div>
+          <div class="form-group">
+            <label class="form-label font-bold" for="quick-mem-type">Hình thức tham gia</label>
+            <select id="quick-mem-type" class="form-select">
+              <option value="guest" selected>⚡ Khách vãng lai (thu theo buổi)</option>
+              <option value="fixed">🏸 Thành viên cố định (góp quỹ tháng)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="quick-mem-note">Ghi chú / Trình độ</label>
+            <input type="text" id="quick-mem-note" class="form-control" maxlength="300" placeholder="VD: Tay trái, trình độ khá...">
+          </div>
+          <label class="flex items-center gap-2" style="font-size: 0.85rem; cursor: pointer; margin: 0.25rem 0 0.5rem;">
+            <input type="checkbox" id="quick-mem-account" onchange="document.getElementById('quick-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <span>Tạo luôn tài khoản đăng nhập cho người này</span>
+          </label>
+          <div id="quick-mem-pwd-wrap" class="form-group" style="display: none;">
+            <label class="form-label" for="quick-mem-password">Mật khẩu ban đầu * (tối thiểu 6 ký tự, không đoán được)</label>
+            <input type="password" id="quick-mem-password" class="form-control" autocomplete="new-password" placeholder="Gửi mật khẩu này cho thành viên, họ sẽ tự đổi sau">
+          </div>
+          <button type="submit" class="btn btn-primary w-full btn-lg" style="margin-top: 0.75rem;">
+            <i class="fas fa-user-plus"></i> Thêm thành viên
+          </button>
+        </form>`;
+      return;
+    }
+
+    const user = AppStorage.getCurrentUser();
+    body.innerHTML = user ? `
+      <p class="text-secondary" style="font-size: 0.9rem; line-height: 1.6; margin: 0;">
+        Bạn đang đăng nhập với tài khoản <b>${Safe.html(user.name || user.username)}</b>.
+        ${user.type === 'fixed' ? 'Bạn là thành viên cố định của CLB.' : 'Muốn trở thành thành viên cố định, hãy gửi yêu cầu trong <b>Hồ sơ cá nhân</b>; Ban quản trị sẽ duyệt.'}
+      </p>` : `
+      <p class="text-secondary" style="font-size: 0.9rem; line-height: 1.6; margin: 0 0 1rem;">
+        Tạo tài khoản để bình chọn các buổi đánh, đóng quỹ và nhận thông báo. Bạn có thể đăng ký bằng số điện thoại hoặc tài khoản Google.
+        Muốn làm thành viên cố định, chọn "cố định" khi đăng ký và chờ Ban quản trị duyệt.
+      </p>
+      <button type="button" class="btn btn-primary w-full btn-lg" onclick="App.showAuthModal('register')">
+        <i class="fas fa-user-plus"></i> Tạo tài khoản
+      </button>`;
+  },
+
+  // Tạo thành viên (dùng chung cho form nhanh và hộp thoại "Thêm thành viên").
+  // createAccount=false -> chỉ ghi tên (không có tài khoản/mật khẩu); true -> bắt buộc mật khẩu hợp lệ do Admin đặt.
+  createMember({ name, phone, email = '', note = '', type = 'guest', role = 'member', avatar = '', createAccount = false, password = '' }) {
+    if (!AppStorage.isAdmin()) return { success: false, message: 'Chỉ Ban quản trị mới được thêm thành viên.' };
+    name = String(name || '').trim();
+    phone = String(phone || '').trim();
     const cleanPhone = phone.replace(/\D/g, '');
+    if (name.length < 2) return { success: false, message: 'Vui lòng nhập họ và tên (tối thiểu 2 ký tự)!' };
+    if (phone && cleanPhone.length < 9) return { success: false, message: 'Số điện thoại chưa hợp lệ (tối thiểu 9 chữ số).' };
+    if (role === 'admin' && !AppStorage.isSuperAdmin()) return { success: false, message: 'Chỉ Quản trị viên mới được cấp vai trò Quản trị viên.' };
 
-    if (!name || !phone) {
-      App.showToast("Vui lòng điền đầy đủ Họ tên và Số điện thoại!", "warning");
-      return;
+    const data = AppStorage.loadData();
+    if (!data.members) data.members = [];
+    if (!data.users) data.users = [];
+    if (cleanPhone && (data.members.some((m) => m.phone && m.phone.replace(/\D/g, '') === cleanPhone) ||
+      data.users.some((u) => u.phone && u.phone.replace(/\D/g, '') === cleanPhone))) {
+      return { success: false, message: 'Số điện thoại này đã tồn tại trong danh sách thành viên!' };
     }
 
-    // Kiểm tra trùng SĐT
-    if ((data.members || []).some(m => m.phone && m.phone.replace(/\D/g, '') === cleanPhone)) {
-      App.showToast("Số điện thoại này đã được đăng ký thành viên trước đó!", "warning");
-      return;
+    const stamp = Date.now();
+    const memId = 'mem_' + stamp;
+    const username = cleanPhone.length >= 9 ? cleanPhone : name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) + Math.floor(100 + Math.random() * 900);
+    const pwd = String(password || '').trim();
+    if (createAccount) {
+      const policy = AppStorage._passwordPolicyError(pwd);
+      if (policy) return { success: false, message: policy };
+      if (AuthCore.isWeakPassword(pwd, { username, phone })) return { success: false, message: 'Mật khẩu quá dễ đoán (trùng SĐT/tên đăng nhập hoặc mật khẩu phổ biến). Hãy đặt mật khẩu khác.' };
+      if (data.users.some((u) => (u.username || '').toLowerCase() === username.toLowerCase())) return { success: false, message: `Tên đăng nhập "${username}" đã tồn tại.` };
+    }
+    const finalAvatar = avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=10b981&color=fff`;
+    const member = { id: memId, name, phone, email, note, type, role, avatar: finalAvatar, joinDate: new Date().toISOString().slice(0, 10) };
+    // Mã chuyển khoản riêng (máy chủ cũng tự cấp/kiểm tra trùng khi đồng bộ)
+    if (window.TransferCode) member.transferCode = TransferCode.plan(data.members.concat([{ id: memId }]))[memId];
+    if (createAccount) member.username = username;
+    data.members.push(member);
+
+    if (createAccount) {
+      data.users.push({
+        id: 'user_' + stamp, username, password: AppStorage.hashPassword(pwd), name, phone, email, note, role,
+        memberId: memId, type, avatar: finalAvatar, createdAt: new Date().toISOString()
+      });
     }
 
-    // Tạo tài khoản trên máy chủ. Mật khẩu tạm = SĐT -> lần đăng nhập đầu sẽ bị buộc đổi mật khẩu.
-    const result = await AppStorage.register({
-      name, phone, usernameInput: cleanPhone, password: cleanPhone.length >= 6 ? cleanPhone : '',
-      memberType: type, remember: true, note
+    // Thành viên cố định -> tạo phiếu thu quỹ tháng hiện tại
+    const fee = Number((data.clubInfo || {}).monthlyFee || (data.clubInfo || {}).monthlyFundFee) || 0;
+    if (type === 'fixed' && fee > 0) {
+      const month = AppStorage.currentMonth();
+      if (!data.monthlyContributions) data.monthlyContributions = [];
+      if (!data.monthlyContributions.some((d) => d.memberId === memId && d.month === month)) {
+        data.monthlyContributions.push({
+          id: `due_${month}_${memId}`, month, memberId: memId, amount: fee, status: 'unpaid', paidAt: null, method: null,
+          billImage: null, approvedBy: null, approvedAt: null, note: 'Thành viên mới'
+        });
+      }
+    }
+    AppStorage.saveData(data, true);
+    return { success: true, member, username: createAccount ? username : '' };
+  },
+
+  addMemberQuick(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const v = (id) => (document.getElementById(id)?.value || '').trim();
+    const createAccount = !!document.getElementById('quick-mem-account')?.checked;
+    const res = this.createMember({
+      name: v('quick-mem-name'), phone: v('quick-mem-phone'), note: v('quick-mem-note'),
+      type: v('quick-mem-type') || 'guest', createAccount, password: v('quick-mem-password')
     });
-    if (!result.success) {
-      App.showToast(result.message, "error");
+    if (!res.success) {
+      App.showToast(res.message, 'warning');
       return;
     }
-    if (result.mustChange) App.openForceChangePasswordModal(cleanPhone);
+    if (e && e.target && e.target.reset) e.target.reset();
+    const wrap = document.getElementById('quick-mem-pwd-wrap');
+    if (wrap) wrap.style.display = 'none';
+    App.showToast(`✅ Đã thêm "${res.member.name}"${res.username ? ` (tên đăng nhập: ${res.username})` : ' (chưa có tài khoản)'}. Mã chuyển khoản: ${res.member.transferCode || 'đang cấp'}`, 'success');
+    this.afterMemberChange();
+    document.getElementById('quick-mem-name')?.focus();
+  },
 
-    // Reset form
-    if (e.target && e.target.reset) e.target.reset();
-
-    if (window.confetti) {
-      window.confetti({ particleCount: 90, spread: 80, origin: { y: 0.6 } });
-    }
-
-    App.showToast(`🎉 Chúc mừng ${name}! Bạn đã gia nhập CLB và đăng nhập thành công!`, "success");
-    
-    // Chuyển sang xem danh sách thành viên
-    this.switchSubTab('list');
+  afterMemberChange() {
+    this.renderMembersTab();
+    this.renderPublicMemberRoster();
+    if (window.SettingsModule) SettingsModule.renderMembersAdmin();
     App.renderUserRoleSelector();
     App.renderUserHeaderAndSidebar();
-    App.refreshDashboardStats();
+    if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
     if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 

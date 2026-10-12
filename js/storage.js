@@ -1134,6 +1134,7 @@ const AppStorage = {
     if (explicit) {
       localStorage.setItem('SMASH_PRO_LOGGED_OUT', 'true');
     }
+    try { if (window.PushClient) PushClient.onBeforeLogout(this._readSession()); } catch (e) {}
     localStorage.removeItem(this._authKey());
     sessionStorage.removeItem(this._authKey());
     this._pruneTokens(); // Token chỉ còn giữ nếu tài khoản này còn thay đổi chờ gửi
