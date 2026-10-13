@@ -300,6 +300,19 @@ const VoteScheduler = {
           }
         }
       }
+      // Đủ người cho số sân -> báo người mở vote (trên thiết bị đang mở)
+      const mail = (data.clubInfo && data.clubInfo.emailNotify) || {};
+      if (!finished && mail.courtFull !== false && (s.voteMode !== 'multi_option' || s.selectedOptionId) && s.emailNotify !== false) {
+        const owner = VotePlan.ownerOf(s, data.clubInfo && data.clubInfo.voteSchedules);
+        const k = `full:${s.id}`;
+        if (owner && owner === user.username && !seen[k]) {
+          const cf = VotePlan.courtFull(s, mail.courtFullPerCourt);
+          if (cf.full) {
+            mark(k);
+            out.push({ type: 'court_full', session: s, info: cf, tag: `court-full-${s.id}` });
+          }
+        }
+      }
       (Array.isArray(s.notices) ? s.notices : []).forEach((n) => {
         if (!n || !n.id) return;
         const k = `n:${n.id}`;
@@ -326,6 +339,10 @@ const VoteScheduler = {
     const info = this._sessionText(s);
     if (item.type === 'vote_open') {
       return { title: `🗳️ Đã mở bình chọn: ${s.title}`, body: `${info}\nVào ứng dụng bình chọn tham gia ngay!`, toast: 'info' };
+    }
+    if (item.type === 'court_full') {
+      const cf = item.info;
+      return { title: `✅ Đã đủ người: ${s.title}`, body: `${info}\nCó ${cf.count} người cho ${cf.courts} sân (đủ ${cf.per} người/sân). Bạn có thể chốt đặt sân.`, toast: 'success' };
     }
     if (item.type === 'booked') {
       return { title: `📋 Đã đặt sân: ${s.title}`, body: `${info}\nBạn đã đăng ký tham gia, hẹn gặp ở sân!`, toast: 'success' };

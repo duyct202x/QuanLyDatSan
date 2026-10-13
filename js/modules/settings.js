@@ -40,6 +40,8 @@ const SettingsModule = {
       setCheck('set-email-enabled', mail.enabled);
       setCheck('set-email-vote-open', mail.voteOpen !== false);
       setCheck('set-email-booked', mail.booked !== false);
+      setCheck('set-email-court-full', mail.courtFull !== false);
+      this.setValue('set-email-court-per', mail.courtFullPerCourt || 6);
       setCheck('set-email-cancelled', mail.cancelled !== false);
       setCheck('set-email-fixed-request', mail.fixedRequest !== false);
       setCheck('set-email-fixed-result', mail.fixedResult !== false);
@@ -265,6 +267,8 @@ const SettingsModule = {
         enabled: checked('set-email-enabled'),
         voteOpen: checked('set-email-vote-open'),
         booked: checked('set-email-booked'),
+        courtFull: checked('set-email-court-full'),
+        courtFullPerCourt: parseInt(document.getElementById('set-email-court-per')?.value) || 6,
         cancelled: checked('set-email-cancelled'),
         fixedRequest: checked('set-email-fixed-request'),
         fixedResult: checked('set-email-fixed-result'),

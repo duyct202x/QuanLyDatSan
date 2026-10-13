@@ -2,6 +2,8 @@
 
 const ScheduleModule = {
   currentViewMode: 'calendar', // 'calendar' | 'cards'
+  calendarScope: 'week', // trong chế độ 'calendar': 'week' (mặc định: tuần hiện tại) | 'month'
+  weekStart: null, // Date (thứ Hai 00:00) của tuần đang xem
   currentFilter: 'upcoming',
   calYear: 2026,
   calMonth: 8, // 0-indexed: 8 = September (Tháng 9)
@@ -22,6 +24,8 @@ const ScheduleModule = {
     const sessions = data.sessions || [];
     this.updateScheduleOverviewStats(sessions);
 
+    if (!this.weekStart) this.weekStart = this.mondayOf(now);
+    this.syncViewModeButtons();
     if (this.currentViewMode === 'calendar') {
       this.renderMonthCalendar();
     } else {
@@ -244,15 +248,42 @@ const ScheduleModule = {
     this.renderSessions('schedule-upcoming-list', filter);
   },
 
-  switchViewMode(mode) {
-    this.currentViewMode = mode;
+  // Thứ Hai (00:00) của tuần chứa ngày d
+  mondayOf(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+    return x;
+  },
+
+  dateKeyOf(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  // Nút chế độ xem đang sáng: 'week' | 'calendar' (tháng) | 'cards'
+  activeViewKey() {
+    return this.currentViewMode === 'calendar' ? (this.calendarScope === 'month' ? 'calendar' : 'week') : 'cards';
+  },
+
+  syncViewModeButtons() {
+    const key = this.activeViewKey();
     document.querySelectorAll('.view-mode-btn').forEach(btn => {
-      if (btn.getAttribute('data-view') === mode) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
+      btn.classList.toggle('active', btn.getAttribute('data-view') === key);
     });
+  },
+
+  switchViewMode(mode) {
+    if (mode === 'week') {
+      this.currentViewMode = 'calendar';
+      this.calendarScope = 'week';
+      this.weekStart = this.mondayOf(new Date());
+    } else if (mode === 'calendar') {
+      this.currentViewMode = 'calendar';
+      this.calendarScope = 'month';
+    } else {
+      this.currentViewMode = mode;
+    }
+    mode = this.currentViewMode;
+    this.syncViewModeButtons();
 
     const calView = document.getElementById('schedule-calendar-view');
     const calUpcoming = document.getElementById('schedule-calendar-upcoming');
@@ -340,9 +371,68 @@ const ScheduleModule = {
   // ==========================================
   // MONTHLY CALENDAR RENDERER
   // ==========================================
-  renderMonthCalendar() {
+  // Lịch tuần: 7 ô (thứ Hai → Chủ nhật) dùng lại lưới của lịch tháng
+  renderWeekCalendar() {
     try {
       this.createPopoverElement();
+      const container = document.getElementById('calendar-grid-body');
+      const titleEl = document.getElementById('calendar-month-display');
+      if (!container) return;
+      const data = AppStorage.loadData();
+      const sessions = data.sessions || [];
+      const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
+      if (!this.weekStart) this.weekStart = this.mondayOf(new Date());
+      const start = this.weekStart;
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+      const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const isThisWeek = this.dateKeyOf(start) === this.dateKeyOf(this.mondayOf(new Date()));
+      if (titleEl) {
+        titleEl.innerHTML = `<i class="far fa-calendar-alt text-primary"></i> ${isThisWeek ? 'Tuần này' : 'Tuần'} · ${fmt(start)} – ${fmt(end)}/${end.getFullYear()}`;
+      }
+      const todayKey = this.dateKeyOf(new Date());
+      let html = '';
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const key = this.dateKeyOf(d);
+        const chips = this.renderDaySessionChips(sessions.filter(s => s.date === key), voteLockHours);
+        html += `
+          <div class="calendar-day-cell week-cell ${key === todayKey ? 'is-today' : ''}">
+            <div class="day-cell-top">
+              <span class="day-number-badge">${d.getDate()} <small style="font-size:0.62rem; opacity:0.8;">T${d.getMonth() + 1}</small></span>
+              <button class="day-add-btn" onclick="event.stopPropagation(); ScheduleModule.openAddSessionForDate(${Safe.js(key)})" title="Đặt lịch cho ngày này">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="day-events-list">${chips}</div>
+          </div>`;
+      }
+      container.innerHTML = html;
+      container.classList.add('is-week');
+      this.updateScheduleOverviewStats(sessions);
+      if (document.getElementById('schedule-upcoming-list')) {
+        this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
+      }
+    } catch (err) {
+      console.error("Lỗi khi kết xuất lịch tuần:", err);
+    }
+  },
+
+  // Điều hướng theo chế độ đang xem (tuần: ±7 ngày, tháng: ±1 tháng)
+  calNav(dir) {
+    if (this.calendarScope === 'week') {
+      const s = this.weekStart || this.mondayOf(new Date());
+      this.weekStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 7 * dir);
+      this.renderMonthCalendar();
+    } else if (dir < 0) this.prevMonth();
+    else this.nextMonth();
+  },
+
+  renderMonthCalendar() {
+    if (this.calendarScope === 'week') return this.renderWeekCalendar();
+    try {
+      this.createPopoverElement();
+      const gridEl = document.getElementById('calendar-grid-body');
+      if (gridEl) gridEl.classList.remove('is-week');
       const container = document.getElementById('calendar-grid-body');
       const titleEl = document.getElementById('calendar-month-display');
       if (!container) return;
@@ -502,6 +592,7 @@ const ScheduleModule = {
     const now = new Date();
     this.calYear = now.getFullYear();
     this.calMonth = now.getMonth();
+    this.weekStart = this.mondayOf(now);
     this.renderMonthCalendar();
   },
 
@@ -2464,7 +2555,8 @@ const ScheduleModule = {
         maxPlayers,
         shuttleType,
         note,
-        status: "open"
+        status: "open",
+        openedBy: (currentUser && currentUser.username) || ''
       };
 
       if (voteMode === 'multi_option') {

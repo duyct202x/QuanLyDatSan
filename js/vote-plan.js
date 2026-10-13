@@ -113,6 +113,55 @@ var VotePlan = (function () {
     return out;
   }
 
+  // Số sân trong chuỗi "Sân 1 & 2", "Sân 3-5", "Sân 1, 2, 3", "(2 sân)"; không đọc được -> 1
+  function courtCount(text) {
+    var t = String(text || '');
+    var m = t.match(/(\d+)\s*sân/i);
+    if (m) return Math.min(30, Math.max(1, +m[1]));
+    t = t.replace(/\([^)]*\)/g, ' ');
+    var seen = {}, n = 0, r;
+    var range = /(\d+)\s*[-–~]\s*(\d+)/g;
+    while ((r = range.exec(t))) {
+      var a = +r[1], b = +r[2];
+      if (b >= a && b - a < 30) for (var i = a; i <= b; i++) if (!seen[i]) { seen[i] = 1; n++; }
+    }
+    t = t.replace(range, ' ');
+    var nums = t.match(/\d+/g) || [];
+    nums.forEach(function (x) { if (!seen[+x]) { seen[+x] = 1; n++; } });
+    return Math.min(30, Math.max(1, n));
+  }
+
+  // Số người đã đăng ký đi (cả khách mang theo); buổi nhiều phương án chỉ tính khi đã chốt phương án
+  function headcount(s) {
+    var multi = s.voteMode === 'multi_option';
+    if (multi && !s.selectedOptionId) return 0;
+    return (s.votes || []).reduce(function (sum, v) {
+      if (!v || !v.memberId) return sum;
+      var going = multi
+        ? !v.notGoing && Array.isArray(v.selectedOptions) && v.selectedOptions.indexOf(s.selectedOptionId) !== -1
+        : v.status === 'going';
+      return going ? sum + 1 + Math.max(0, Math.min(20, Number(v.guests) || 0)) : sum;
+    }, 0);
+  }
+
+  // Đủ người cho số sân đã đặt? perCourt = số người tối thiểu mỗi sân (>=)
+  function courtFull(s, perCourt) {
+    var per = Math.min(20, Math.max(2, Math.floor(Number(perCourt)) || 6));
+    var courts = courtCount(s.courtNumbers);
+    var n = headcount(s);
+    return { full: n >= per * courts, count: n, courts: courts, per: per, need: per * courts };
+  }
+
+  // Người mở vote của buổi: người tạo buổi > người bấm "Mở vote ngay" > người tạo lịch tự động. '' nếu không rõ
+  function ownerOf(s, schedules) {
+    if (s.openedBy) return String(s.openedBy);
+    var opener = '';
+    (s.notices || []).forEach(function (n) { if (n && n.type === 'vote_open' && n.by && n.by !== 'auto') opener = n.by; });
+    if (opener) return opener;
+    var sc = (schedules || []).filter(function (x) { return x && x.id === s.scheduleId; })[0];
+    return sc && sc.createdBy && sc.createdBy !== 'auto' ? String(sc.createdBy) : '';
+  }
+
   function sessionIdFor(s, dateStr) { return 'auto_' + s.id + '_' + dateStr.replace(/-/g, ''); }
 
   // Buổi đánh của lịch s vào ngày dateStr
@@ -142,6 +191,7 @@ var VotePlan = (function () {
       scheduleId: s.id,
       createdBy: by || 'auto'
     };
+    if (s.createdBy && s.createdBy !== 'auto') session.openedBy = String(s.createdBy);
     if (s.emailNotify === false) session.emailNotify = false;
     // Mở ngay khi tạo -> kèm thông báo mở vote (giờ hẹn đã có voteOpenAt, thiết bị & email tự báo khi tới giờ)
     if (!openAt) session.notices = [{ id: 'nt_' + session.id, type: 'vote_open', at: nowMs, by: 'auto' }];
@@ -235,6 +285,10 @@ var VotePlan = (function () {
     openAtFor: openAtFor,
     occurrences: occurrences,
     sessionIdFor: sessionIdFor,
+    courtCount: courtCount,
+    headcount: headcount,
+    courtFull: courtFull,
+    ownerOf: ownerOf,
     buildSession: buildSession,
     dueSessions: dueSessions,
     nextRun: nextRun,

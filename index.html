@@ -48,7 +48,7 @@
 
   <!-- Application Stylesheets -->
   <!-- BUNDLE:CSS:START -->
-  <link rel="stylesheet" href="css/bundle.css?v=98480ecbb5">
+  <link rel="stylesheet" href="css/bundle.css?v=798a6bd6d8">
   <!-- BUNDLE:CSS:END -->
 </head>
 <body>
@@ -322,7 +322,10 @@
           <div class="schedule-controls-bar">
             <!-- View Mode Switcher -->
             <div class="view-mode-toggle">
-              <button class="view-mode-btn active" data-view="calendar" onclick="ScheduleModule.switchViewMode('calendar')">
+              <button class="view-mode-btn active" data-view="week" onclick="ScheduleModule.switchViewMode('week')">
+                <i class="fas fa-calendar-week"></i> <span>Tuần này</span>
+              </button>
+              <button class="view-mode-btn" data-view="calendar" onclick="ScheduleModule.switchViewMode('calendar')">
                 <i class="far fa-calendar-alt"></i> <span>Lịch tháng</span>
               </button>
               <button class="view-mode-btn" data-view="cards" onclick="ScheduleModule.switchViewMode('cards')">
@@ -358,10 +361,10 @@
               </div>
 
               <div class="calendar-nav-buttons">
-                <button class="calendar-nav-btn" onclick="ScheduleModule.prevMonth()" title="Tháng trước">
+                <button class="calendar-nav-btn" onclick="ScheduleModule.calNav(-1)" title="Kỳ trước">
                   <i class="fas fa-chevron-left"></i>
                 </button>
-                <button class="calendar-nav-btn" onclick="ScheduleModule.nextMonth()" title="Tháng sau">
+                <button class="calendar-nav-btn" onclick="ScheduleModule.calNav(1)" title="Kỳ sau">
                   <i class="fas fa-chevron-right"></i>
                 </button>
               </div>
@@ -965,6 +968,11 @@
                   <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.4rem 1rem; margin-top: 0.75rem; font-size: 0.85rem;">
                     <label><input type="checkbox" id="set-email-vote-open" checked> Mở bình chọn</label>
                     <label><input type="checkbox" id="set-email-booked" checked> Đặt sân thành công (người đã vote)</label>
+                    <label><input type="checkbox" id="set-email-court-full" checked> Đủ người cho số sân (báo người mở vote), từ
+                      <select id="set-email-court-per" class="form-select" style="display: inline-block; width: auto; padding: 0.1rem 1.6rem 0.1rem 0.4rem; margin: 0 0.25rem;">
+                        <option value="4">4</option><option value="5">5</option><option value="6" selected>6</option><option value="7">7</option><option value="8">8</option>
+                      </select>người/sân
+                    </label>
                     <label><input type="checkbox" id="set-email-cancelled" checked> Hủy buổi (người đã vote)</label>
                     <label><input type="checkbox" id="set-email-fixed-request" checked> Yêu cầu thành viên cố định (gửi Ban quản trị)</label>
                     <label><input type="checkbox" id="set-email-fixed-result" checked> Kết quả duyệt (gửi người yêu cầu)</label>
@@ -1319,7 +1327,7 @@
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
   <!-- BUNDLE:JS:START -->
-  <script src="js/bundle.js?v=cb5b8c639d"></script>
+  <script src="js/bundle.js?v=7795fb54d4"></script>
   <!-- BUNDLE:JS:END -->
 
 </body>

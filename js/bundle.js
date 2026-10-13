@@ -858,6 +858,55 @@ var VotePlan = (function () {
     return out;
   }
 
+  // Số sân trong chuỗi "Sân 1 & 2", "Sân 3-5", "Sân 1, 2, 3", "(2 sân)"; không đọc được -> 1
+  function courtCount(text) {
+    var t = String(text || '');
+    var m = t.match(/(\d+)\s*sân/i);
+    if (m) return Math.min(30, Math.max(1, +m[1]));
+    t = t.replace(/\([^)]*\)/g, ' ');
+    var seen = {}, n = 0, r;
+    var range = /(\d+)\s*[-–~]\s*(\d+)/g;
+    while ((r = range.exec(t))) {
+      var a = +r[1], b = +r[2];
+      if (b >= a && b - a < 30) for (var i = a; i <= b; i++) if (!seen[i]) { seen[i] = 1; n++; }
+    }
+    t = t.replace(range, ' ');
+    var nums = t.match(/\d+/g) || [];
+    nums.forEach(function (x) { if (!seen[+x]) { seen[+x] = 1; n++; } });
+    return Math.min(30, Math.max(1, n));
+  }
+
+  // Số người đã đăng ký đi (cả khách mang theo); buổi nhiều phương án chỉ tính khi đã chốt phương án
+  function headcount(s) {
+    var multi = s.voteMode === 'multi_option';
+    if (multi && !s.selectedOptionId) return 0;
+    return (s.votes || []).reduce(function (sum, v) {
+      if (!v || !v.memberId) return sum;
+      var going = multi
+        ? !v.notGoing && Array.isArray(v.selectedOptions) && v.selectedOptions.indexOf(s.selectedOptionId) !== -1
+        : v.status === 'going';
+      return going ? sum + 1 + Math.max(0, Math.min(20, Number(v.guests) || 0)) : sum;
+    }, 0);
+  }
+
+  // Đủ người cho số sân đã đặt? perCourt = số người tối thiểu mỗi sân (>=)
+  function courtFull(s, perCourt) {
+    var per = Math.min(20, Math.max(2, Math.floor(Number(perCourt)) || 6));
+    var courts = courtCount(s.courtNumbers);
+    var n = headcount(s);
+    return { full: n >= per * courts, count: n, courts: courts, per: per, need: per * courts };
+  }
+
+  // Người mở vote của buổi: người tạo buổi > người bấm "Mở vote ngay" > người tạo lịch tự động. '' nếu không rõ
+  function ownerOf(s, schedules) {
+    if (s.openedBy) return String(s.openedBy);
+    var opener = '';
+    (s.notices || []).forEach(function (n) { if (n && n.type === 'vote_open' && n.by && n.by !== 'auto') opener = n.by; });
+    if (opener) return opener;
+    var sc = (schedules || []).filter(function (x) { return x && x.id === s.scheduleId; })[0];
+    return sc && sc.createdBy && sc.createdBy !== 'auto' ? String(sc.createdBy) : '';
+  }
+
   function sessionIdFor(s, dateStr) { return 'auto_' + s.id + '_' + dateStr.replace(/-/g, ''); }
 
   // Buổi đánh của lịch s vào ngày dateStr
@@ -887,6 +936,7 @@ var VotePlan = (function () {
       scheduleId: s.id,
       createdBy: by || 'auto'
     };
+    if (s.createdBy && s.createdBy !== 'auto') session.openedBy = String(s.createdBy);
     if (s.emailNotify === false) session.emailNotify = false;
     // Mở ngay khi tạo -> kèm thông báo mở vote (giờ hẹn đã có voteOpenAt, thiết bị & email tự báo khi tới giờ)
     if (!openAt) session.notices = [{ id: 'nt_' + session.id, type: 'vote_open', at: nowMs, by: 'auto' }];
@@ -980,6 +1030,10 @@ var VotePlan = (function () {
     openAtFor: openAtFor,
     occurrences: occurrences,
     sessionIdFor: sessionIdFor,
+    courtCount: courtCount,
+    headcount: headcount,
+    courtFull: courtFull,
+    ownerOf: ownerOf,
     buildSession: buildSession,
     dueSessions: dueSessions,
     nextRun: nextRun,
@@ -4078,6 +4132,8 @@ window.MembersModule = MembersModule;
 
 const ScheduleModule = {
   currentViewMode: 'calendar', // 'calendar' | 'cards'
+  calendarScope: 'week', // trong chế độ 'calendar': 'week' (mặc định: tuần hiện tại) | 'month'
+  weekStart: null, // Date (thứ Hai 00:00) của tuần đang xem
   currentFilter: 'upcoming',
   calYear: 2026,
   calMonth: 8, // 0-indexed: 8 = September (Tháng 9)
@@ -4098,6 +4154,8 @@ const ScheduleModule = {
     const sessions = data.sessions || [];
     this.updateScheduleOverviewStats(sessions);
 
+    if (!this.weekStart) this.weekStart = this.mondayOf(now);
+    this.syncViewModeButtons();
     if (this.currentViewMode === 'calendar') {
       this.renderMonthCalendar();
     } else {
@@ -4320,15 +4378,42 @@ const ScheduleModule = {
     this.renderSessions('schedule-upcoming-list', filter);
   },
 
-  switchViewMode(mode) {
-    this.currentViewMode = mode;
+  // Thứ Hai (00:00) của tuần chứa ngày d
+  mondayOf(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+    return x;
+  },
+
+  dateKeyOf(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  // Nút chế độ xem đang sáng: 'week' | 'calendar' (tháng) | 'cards'
+  activeViewKey() {
+    return this.currentViewMode === 'calendar' ? (this.calendarScope === 'month' ? 'calendar' : 'week') : 'cards';
+  },
+
+  syncViewModeButtons() {
+    const key = this.activeViewKey();
     document.querySelectorAll('.view-mode-btn').forEach(btn => {
-      if (btn.getAttribute('data-view') === mode) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
+      btn.classList.toggle('active', btn.getAttribute('data-view') === key);
     });
+  },
+
+  switchViewMode(mode) {
+    if (mode === 'week') {
+      this.currentViewMode = 'calendar';
+      this.calendarScope = 'week';
+      this.weekStart = this.mondayOf(new Date());
+    } else if (mode === 'calendar') {
+      this.currentViewMode = 'calendar';
+      this.calendarScope = 'month';
+    } else {
+      this.currentViewMode = mode;
+    }
+    mode = this.currentViewMode;
+    this.syncViewModeButtons();
 
     const calView = document.getElementById('schedule-calendar-view');
     const calUpcoming = document.getElementById('schedule-calendar-upcoming');
@@ -4416,9 +4501,68 @@ const ScheduleModule = {
   // ==========================================
   // MONTHLY CALENDAR RENDERER
   // ==========================================
-  renderMonthCalendar() {
+  // Lịch tuần: 7 ô (thứ Hai → Chủ nhật) dùng lại lưới của lịch tháng
+  renderWeekCalendar() {
     try {
       this.createPopoverElement();
+      const container = document.getElementById('calendar-grid-body');
+      const titleEl = document.getElementById('calendar-month-display');
+      if (!container) return;
+      const data = AppStorage.loadData();
+      const sessions = data.sessions || [];
+      const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
+      if (!this.weekStart) this.weekStart = this.mondayOf(new Date());
+      const start = this.weekStart;
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+      const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const isThisWeek = this.dateKeyOf(start) === this.dateKeyOf(this.mondayOf(new Date()));
+      if (titleEl) {
+        titleEl.innerHTML = `<i class="far fa-calendar-alt text-primary"></i> ${isThisWeek ? 'Tuần này' : 'Tuần'} · ${fmt(start)} – ${fmt(end)}/${end.getFullYear()}`;
+      }
+      const todayKey = this.dateKeyOf(new Date());
+      let html = '';
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const key = this.dateKeyOf(d);
+        const chips = this.renderDaySessionChips(sessions.filter(s => s.date === key), voteLockHours);
+        html += `
+          <div class="calendar-day-cell week-cell ${key === todayKey ? 'is-today' : ''}">
+            <div class="day-cell-top">
+              <span class="day-number-badge">${d.getDate()} <small style="font-size:0.62rem; opacity:0.8;">T${d.getMonth() + 1}</small></span>
+              <button class="day-add-btn" onclick="event.stopPropagation(); ScheduleModule.openAddSessionForDate(${Safe.js(key)})" title="Đặt lịch cho ngày này">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="day-events-list">${chips}</div>
+          </div>`;
+      }
+      container.innerHTML = html;
+      container.classList.add('is-week');
+      this.updateScheduleOverviewStats(sessions);
+      if (document.getElementById('schedule-upcoming-list')) {
+        this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
+      }
+    } catch (err) {
+      console.error("Lỗi khi kết xuất lịch tuần:", err);
+    }
+  },
+
+  // Điều hướng theo chế độ đang xem (tuần: ±7 ngày, tháng: ±1 tháng)
+  calNav(dir) {
+    if (this.calendarScope === 'week') {
+      const s = this.weekStart || this.mondayOf(new Date());
+      this.weekStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 7 * dir);
+      this.renderMonthCalendar();
+    } else if (dir < 0) this.prevMonth();
+    else this.nextMonth();
+  },
+
+  renderMonthCalendar() {
+    if (this.calendarScope === 'week') return this.renderWeekCalendar();
+    try {
+      this.createPopoverElement();
+      const gridEl = document.getElementById('calendar-grid-body');
+      if (gridEl) gridEl.classList.remove('is-week');
       const container = document.getElementById('calendar-grid-body');
       const titleEl = document.getElementById('calendar-month-display');
       if (!container) return;
@@ -4578,6 +4722,7 @@ const ScheduleModule = {
     const now = new Date();
     this.calYear = now.getFullYear();
     this.calMonth = now.getMonth();
+    this.weekStart = this.mondayOf(now);
     this.renderMonthCalendar();
   },
 
@@ -6540,7 +6685,8 @@ const ScheduleModule = {
         maxPlayers,
         shuttleType,
         note,
-        status: "open"
+        status: "open",
+        openedBy: (currentUser && currentUser.username) || ''
       };
 
       if (voteMode === 'multi_option') {
@@ -8109,6 +8255,19 @@ const VoteScheduler = {
           }
         }
       }
+      // Đủ người cho số sân -> báo người mở vote (trên thiết bị đang mở)
+      const mail = (data.clubInfo && data.clubInfo.emailNotify) || {};
+      if (!finished && mail.courtFull !== false && (s.voteMode !== 'multi_option' || s.selectedOptionId) && s.emailNotify !== false) {
+        const owner = VotePlan.ownerOf(s, data.clubInfo && data.clubInfo.voteSchedules);
+        const k = `full:${s.id}`;
+        if (owner && owner === user.username && !seen[k]) {
+          const cf = VotePlan.courtFull(s, mail.courtFullPerCourt);
+          if (cf.full) {
+            mark(k);
+            out.push({ type: 'court_full', session: s, info: cf, tag: `court-full-${s.id}` });
+          }
+        }
+      }
       (Array.isArray(s.notices) ? s.notices : []).forEach((n) => {
         if (!n || !n.id) return;
         const k = `n:${n.id}`;
@@ -8135,6 +8294,10 @@ const VoteScheduler = {
     const info = this._sessionText(s);
     if (item.type === 'vote_open') {
       return { title: `🗳️ Đã mở bình chọn: ${s.title}`, body: `${info}\nVào ứng dụng bình chọn tham gia ngay!`, toast: 'info' };
+    }
+    if (item.type === 'court_full') {
+      const cf = item.info;
+      return { title: `✅ Đã đủ người: ${s.title}`, body: `${info}\nCó ${cf.count} người cho ${cf.courts} sân (đủ ${cf.per} người/sân). Bạn có thể chốt đặt sân.`, toast: 'success' };
     }
     if (item.type === 'booked') {
       return { title: `📋 Đã đặt sân: ${s.title}`, body: `${info}\nBạn đã đăng ký tham gia, hẹn gặp ở sân!`, toast: 'success' };
@@ -11416,6 +11579,8 @@ const SettingsModule = {
       setCheck('set-email-enabled', mail.enabled);
       setCheck('set-email-vote-open', mail.voteOpen !== false);
       setCheck('set-email-booked', mail.booked !== false);
+      setCheck('set-email-court-full', mail.courtFull !== false);
+      this.setValue('set-email-court-per', mail.courtFullPerCourt || 6);
       setCheck('set-email-cancelled', mail.cancelled !== false);
       setCheck('set-email-fixed-request', mail.fixedRequest !== false);
       setCheck('set-email-fixed-result', mail.fixedResult !== false);
@@ -11641,6 +11806,8 @@ const SettingsModule = {
         enabled: checked('set-email-enabled'),
         voteOpen: checked('set-email-vote-open'),
         booked: checked('set-email-booked'),
+        courtFull: checked('set-email-court-full'),
+        courtFullPerCourt: parseInt(document.getElementById('set-email-court-per')?.value) || 6,
         cancelled: checked('set-email-cancelled'),
         fixedRequest: checked('set-email-fixed-request'),
         fixedResult: checked('set-email-fixed-result'),

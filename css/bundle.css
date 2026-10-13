@@ -2553,6 +2553,10 @@ body.is-guest #header-user-section { border-left: 0 !important; padding-left: 0 
   }
 }
 
+/* Lịch tuần: một hàng 7 ô, cao hơn để chứa nhiều buổi */
+.calendar-days-grid.is-week .calendar-day-cell.week-cell { min-height: 220px; }
+@media (max-width: 768px) { .calendar-days-grid.is-week .calendar-day-cell.week-cell { min-height: 150px; } }
+
 /* ===== css/voting.css ===== */
 /* Voting Modal and Poll Elements */
 .vote-options-grid {
