@@ -704,8 +704,17 @@ const App = {
     document.body.classList.toggle('is-member', isFixed);
     document.body.classList.toggle('is-guest', isGuest);
 
+    // Phần tử "admin-only" có data-perm: người giữ vai trò tùy chỉnh có quyền tương ứng cũng được thấy
+    const heldPerms = isAdmin ? [] : AppStorage.perms();
     document.querySelectorAll('.admin-only').forEach(el => {
-      el.style.display = isAdmin ? '' : 'none';
+      const need = el.getAttribute('data-perm');
+      const granted = !isAdmin && need && (need === 'any' ? heldPerms.length > 0 : heldPerms.includes(need));
+      if (granted) {
+        el.style.setProperty('display', el.classList.contains('nav-link') ? 'flex' : (el.tagName === 'DIV' ? 'block' : 'inline-flex'), 'important');
+      } else {
+        el.style.removeProperty('display');
+        el.style.display = isAdmin ? '' : 'none';
+      }
     });
     document.querySelectorAll('.member-fixed-only').forEach(el => {
       el.style.display = isFixed ? '' : 'none';
@@ -783,7 +792,8 @@ const App = {
       if (sidebarAvatar) sidebarAvatar.src = currentUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name)}&background=10b981&color=fff`;
       if (sidebarName) sidebarName.innerText = currentUser.name;
       if (sidebarRole) {
-        sidebarRole.innerText = currentUser.role === 'admin' ? '👑 Quản trị viên' : currentUser.role === 'treasurer' ? '💼 Thủ quỹ CLB' : (currentUser.type === 'fixed' ? '🏸 Thành viên CLB' : '⚡ Khách vãng lai');
+        const customRole = AppStorage.getRole(currentUser.roleId);
+        sidebarRole.innerText = currentUser.role === 'admin' ? '👑 Quản trị viên' : currentUser.role === 'treasurer' ? '💼 Thủ quỹ CLB' : customRole ? `🎖️ ${customRole.name}` : (currentUser.type === 'fixed' ? '🏸 Thành viên CLB' : '⚡ Khách vãng lai');
         sidebarRole.className = `badge ${currentUser.role === 'admin' ? 'badge-warning' : currentUser.role === 'treasurer' ? 'badge-info' : (currentUser.type === 'fixed' ? 'badge-paid' : 'badge-warning')}`;
       }
     }
@@ -1183,12 +1193,101 @@ const App = {
       if (isLarge) dialogEl.classList.add('modal-lg');
       else dialogEl.classList.remove('modal-lg');
     }
-    if (overlay) overlay.classList.add('active');
+    if (overlay) {
+      this._modalReturnFocus = document.activeElement;
+      if (!this._escBound) {
+        this._escBound = true;
+        document.addEventListener('keydown', (e) => {
+          const ov = document.getElementById('global-modal-overlay');
+          if (e.key === 'Escape' && ov && ov.classList.contains('active') && !document.querySelector('.app-dialog')) App.closeModal();
+        });
+      }
+      overlay.classList.add('active');
+      // Trợ năng: đưa tiêu điểm vào hộp thoại để bàn phím/trình đọc màn hình dùng được
+      const first = overlay.querySelector('input:not([type=hidden]), select, textarea, button.btn-primary, button.btn');
+      if (first && typeof first.focus === 'function') setTimeout(() => first.focus({ preventScroll: true }), 30);
+    }
   },
 
   closeModal() {
     const overlay = document.getElementById('global-modal-overlay');
     if (overlay) overlay.classList.remove('active');
+    const back = this._modalReturnFocus;
+    this._modalReturnFocus = null;
+    if (back && document.contains(back) && typeof back.focus === 'function') back.focus({ preventScroll: true });
+  },
+
+  // Hộp thoại xác nhận của ứng dụng (thay confirm() của trình duyệt). Trả về Promise<boolean>.
+  confirm(message, opts = {}) {
+    return new Promise((resolve) => {
+      const danger = opts.danger !== undefined ? !!opts.danger : /xóa|đặt lại|reset|hủy liên kết/i.test(String(message));
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay active app-dialog';
+      overlay.style.zIndex = '10000';
+      overlay.setAttribute('role', 'alertdialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-label', opts.title || 'Xác nhận');
+      overlay.innerHTML = `
+        <div class="modal-dialog" style="max-width: 440px;">
+          <div class="modal-header"><h3 class="modal-title">${Safe.html(opts.title || (danger ? 'Xác nhận thao tác' : 'Xác nhận'))}</h3></div>
+          <div class="modal-body">
+            <div style="white-space: pre-line; line-height: 1.55; margin-bottom: 1.1rem;">${Safe.html(String(message))}</div>
+            <div class="flex gap-2" style="justify-content: flex-end;">
+              <button type="button" class="btn btn-secondary" data-act="no">${Safe.html(opts.cancelText || 'Hủy')}</button>
+              <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-act="yes">${Safe.html(opts.okText || 'Đồng ý')}</button>
+            </div>
+          </div>
+        </div>`;
+      const previous = document.activeElement;
+      const done = (val) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (previous && document.contains(previous) && previous.focus) previous.focus({ preventScroll: true });
+        resolve(val);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+        else if (e.key === 'Tab') {
+          const btns = overlay.querySelectorAll('button');
+          const first = btns[0], last = btns[btns.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) return done(false);
+        const act = e.target.closest && e.target.closest('[data-act]');
+        if (act) done(act.getAttribute('data-act') === 'yes');
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      const okBtn = overlay.querySelector('[data-act=yes]');
+      (danger ? overlay.querySelector('[data-act=no]') : okBtn).focus();
+    });
+  },
+
+  // Hiển thị văn bản để sao chép (thay prompt() của trình duyệt)
+  showText(title, text) {
+    const id = 'show-text-area';
+    this.openModal(Safe.html(String(title || 'Sao chép')), `
+      <textarea id="${id}" class="form-control" rows="8" readonly style="width: 100%; font-size: 0.85rem;">${Safe.html(String(text || ''))}</textarea>
+      <div class="flex gap-2" style="justify-content: flex-end; margin-top: 0.75rem;">
+        <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+        <button type="button" class="btn btn-primary" onclick="App.copyShownText()"><i class="fas fa-copy"></i> Sao chép</button>
+      </div>`);
+    setTimeout(() => { const el = document.getElementById(id); if (el) el.select(); }, 40);
+  },
+
+  async copyShownText() {
+    const el = document.getElementById('show-text-area');
+    if (!el) return;
+    try {
+      await navigator.clipboard.writeText(el.value);
+    } catch (e) {
+      el.select();
+      try { document.execCommand('copy'); } catch (e2) { /* người dùng tự sao chép */ }
+    }
+    this.showToast('Đã sao chép.', 'success');
   },
 
   // Toast Notifications
@@ -1221,7 +1320,42 @@ const App = {
 };
 
 // Khởi chạy ứng dụng
+// Trợ năng: bổ sung nhãn cho nút chỉ có biểu tượng và cho thành phần bấm được nhưng không phải <button>
+const A11y = {
+  _timer: null,
+  enhance(root = document.body) {
+    root.querySelectorAll('button:not([aria-label]), a[onclick]:not([aria-label]), a[href]:not([aria-label])').forEach((el) => {
+      if ((el.textContent || '').trim()) return;
+      const label = el.getAttribute('title') || el.getAttribute('data-tooltip');
+      if (label) el.setAttribute('aria-label', label);
+    });
+    root.querySelectorAll('[onclick]:not(button):not(a):not(input):not(select):not(textarea):not([role])').forEach((el) => {
+      el.setAttribute('role', 'button');
+      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+    });
+    root.querySelectorAll('input:not([aria-label]):not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea:not([aria-label])').forEach((el) => {
+      if (el.id && document.querySelector(`label[for="${el.id}"]`)) return;
+      if (el.closest('label')) return;
+      const label = el.getAttribute('placeholder') || el.getAttribute('title');
+      if (label) el.setAttribute('aria-label', label);
+    });
+  },
+  init() {
+    document.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.getAttribute && e.target.getAttribute('role') === 'button' && !['BUTTON', 'A', 'INPUT'].includes(e.target.tagName)) {
+        e.preventDefault();
+        e.target.click();
+      }
+    });
+    const run = () => { clearTimeout(this._timer); this._timer = setTimeout(() => this.enhance(), 150); };
+    new MutationObserver(run).observe(document.body, { childList: true, subtree: true });
+    this.enhance();
+  }
+};
+window.A11y = A11y;
+
 document.addEventListener('DOMContentLoaded', () => {
+  A11y.init();
   App.init();
 });
 

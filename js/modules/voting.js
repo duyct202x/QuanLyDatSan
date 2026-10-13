@@ -101,7 +101,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast("Buổi đánh này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch. Vui lòng liên hệ Ban Quản Trị!", "warning");
@@ -132,7 +132,7 @@ const VotingModule = {
       App.showAuthModal('login');
       return;
     }
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -349,7 +349,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast(lockInfo.notOpenYet ? `⏰ Chưa tới giờ mở bình chọn (${lockInfo.deadlineFormatted}).` : "Buổi khảo sát này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch!", "error");
@@ -440,7 +440,7 @@ const VotingModule = {
       App.showAuthModal('login');
       return;
     }
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -622,7 +622,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast(lockInfo.notOpenYet ? `⏰ Chưa tới giờ mở bình chọn (${lockInfo.deadlineFormatted}).` : "Buổi đánh này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch!", "error");
@@ -708,7 +708,7 @@ const VotingModule = {
   },
 
   toggleAdminLock(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên mới có quyền khóa/mở bình chọn!", "warning");
       return;
     }
@@ -729,7 +729,7 @@ const VotingModule = {
   },
 
   openManualAddModal(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên mới có quyền thêm người khác!", "warning");
       return;
     }

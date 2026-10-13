@@ -83,6 +83,35 @@ const AutoScheduleModule = {
           <button class="btn btn-primary btn-sm" onclick="AutoScheduleModule.openEditor()"><i class="fas fa-plus"></i> Thêm lịch</button>
         </div>
         ${rows || '<div class="text-secondary" style="font-size: 0.82rem; margin-top: 0.5rem;">Chưa có lịch. Tạo lịch theo ngày cụ thể, theo thứ trong tuần hoặc theo ngày trong tháng; hệ thống tự tạo buổi và mở bình chọn đúng giờ.</div>'}
+        ${this.renderTimeline(data, list, now)}
+      </div>`;
+  },
+
+  // Dòng thời gian hợp nhất: các buổi sắp tới + giờ mở vote + NGUỒN của giờ đó (lịch lặp / quy tắc mặc định / hẹn tay / mở ngay)
+  renderTimeline(data, list, now) {
+    const upcoming = (data.sessions || []).filter((s) => s && s.date && s.status !== 'cancelled' && s.status !== 'completed' &&
+      ScheduleModule.parseSessionDateTime(s.date, s.endTime || '23:59').getTime() >= now)
+      .sort((a, b) => ScheduleModule.parseSessionDateTime(a.date, a.startTime) - ScheduleModule.parseSessionDateTime(b.date, b.startTime)).slice(0, 8);
+    if (!upcoming.length) return '';
+    const byId = new Map(list.map((s) => [s.id, s]));
+    const items = upcoming.map((s) => {
+      const st = VoteScheduler.getOpenState(s, now);
+      let source = 'Hẹn tay';
+      if (s.scheduleId && byId.has(s.scheduleId)) source = `Lịch lặp: ${byId.get(s.scheduleId).title || 'Giao lưu cầu lông'}`;
+      else if (s.scheduleId) source = 'Lịch lặp (đã xóa)';
+      else if (!st.scheduled) source = 'Mở ngay khi tạo';
+      const state = !st.scheduled ? '🟢 Đang mở' : st.isOpen ? `🟢 Đã mở lúc ${st.label}` : `⏳ Mở lúc ${st.label}`;
+      return `
+        <div class="flex items-center justify-between" style="gap: 0.5rem; padding: 0.4rem 0; border-top: 1px dashed var(--border-color); flex-wrap: wrap; font-size: 0.82rem;">
+          <span><b>${Safe.html(s.title)}</b> <span class="text-secondary">• ${Safe.html(s.date.split('-').reverse().join('/'))} ${Safe.html(s.startTime || '')}</span></span>
+          <span class="text-secondary">${state} • <i>${Safe.html(source)}</i></span>
+        </div>`;
+    }).join('');
+    return `
+      <div style="margin-top: 0.9rem;">
+        <div class="font-bold" style="font-size: 0.85rem;"><i class="fas fa-stream text-primary"></i> Dòng thời gian mở vote sắp tới</div>
+        <div class="text-secondary" style="font-size: 0.76rem; margin: 0.15rem 0 0.3rem;">Một nơi xem mọi buổi sắp tới và giờ mở vote, bất kể được tạo theo lịch lặp hay tạo tay. Muốn đổi một buổi riêng: mở buổi đó → "Hẹn giờ mở vote".</div>
+        ${items}
       </div>`;
   },
 
@@ -340,8 +369,8 @@ const AutoScheduleModule = {
     });
   },
 
-  remove(scheduleId) {
-    if (!confirm('Xóa lịch bình chọn tự động này? Các buổi đã tạo vẫn được giữ nguyên.')) return;
+  async remove(scheduleId) {
+    if (!(await App.confirm('Xóa lịch bình chọn tự động này? Các buổi đã tạo vẫn được giữ nguyên.'))) return;
     if (this._update(scheduleId, (s, list) => list.filter((x) => x.id !== scheduleId))) App.showToast('🗑️ Đã xóa lịch', 'success');
   }
 };

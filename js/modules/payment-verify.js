@@ -117,6 +117,7 @@ ${second.text}`;
 
   // Khóa nhận diện ảnh (đổi ảnh -> phải đối chiếu lại): độ dài + băm các ký tự lấy mẫu
   imgKey(dataUrl) {
+    if (AppStorage.isBillMarker(dataUrl)) return String(dataUrl).slice(AppStorage.BILL_MARK.length); // máy chủ đã tính sẵn cùng khóa
     const s = String(dataUrl || '');
     let h = 2166136261;
     for (let i = 0; i < s.length; i += 97) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
@@ -139,7 +140,7 @@ ${second.text}`;
   },
 
   async verifyDue(dueId, { force = false } = {}) {
-    if (!AppStorage.isAdmin()) return null;
+    if (!AppStorage.can('finance')) return null;
     let data = AppStorage.loadData();
     let due = (data.monthlyContributions || []).find((d) => d.id === dueId);
     if (!due || !due.billImage) return null;
@@ -153,7 +154,9 @@ ${second.text}`;
     }
     let res;
     try {
-      res = await this.check(due.billImage, expected);
+      const image = await AppStorage.getBill(due);
+      if (!image) throw new Error('không tải được ảnh biên lai từ máy chủ');
+      res = await this.check(image, expected);
     } catch (e) {
       console.warn('[PaymentVerify] Lỗi đọc ảnh:', e);
       this._setStatus(`Không đọc được ảnh: ${e.message}`);
@@ -175,7 +178,7 @@ ${second.text}`;
 
   // Chạy nền cho các phiếu chờ duyệt có ảnh (chỉ Admin/Thủ quỹ). Từng phiếu một để không treo máy.
   async autoRun() {
-    if (this._busy || !AppStorage.isAdmin()) return;
+    if (this._busy || !AppStorage.can('finance')) return;
     const list = this.targets(AppStorage.loadData());
     if (!list.length) return;
     this._busy = true;
@@ -229,7 +232,7 @@ ${second.text}`;
           ${v.txRef ? `<li>🔖 Mã giao dịch: <span class="font-mono">${Safe.html(v.txRef)}</span></li>` : ''}
           ${dup ? `<li>🚨 Mã giao dịch này cũng xuất hiện ở phiếu của <strong>${Safe.html(dupMember ? dupMember.name : 'thành viên khác')}</strong> (tháng ${Safe.html(dup.month)}). Có thể dùng lại một biên lai.</li>` : ''}
         </ul>
-        <img src="${Safe.url(due.billImage)}" alt="Biên lai" style="max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 8px; border: 1px solid var(--border-color);">
+        <img id="pv-detail-img" alt="Biên lai" style="max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 8px; border: 1px solid var(--border-color); min-height: 40px;">
         <p class="text-secondary" style="font-size: 0.78rem; margin: 0;">
           Đối chiếu tự động chỉ kiểm tra ảnh có <b>nhất quán</b> với khoản phải đóng. Ảnh có thể bị chỉnh sửa, nên nếu nghi ngờ hãy kiểm tra sao kê ngân hàng trước khi duyệt.
         </p>
@@ -241,6 +244,10 @@ ${second.text}`;
         </div>
       </div>`;
     App.openModal('🧾 Đối chiếu biên lai', body, true);
+    AppStorage.getBill(due).then((img) => {
+      const el = document.getElementById('pv-detail-img');
+      if (el && img) el.src = Safe.url(img);
+    });
   },
 
   async recheck(dueId) {
@@ -255,7 +262,7 @@ ${second.text}`;
   renderBar() {
     const box = document.getElementById('fund-verify-bar');
     if (!box) return;
-    if (!AppStorage.isAdmin()) { box.innerHTML = ''; return; }
+    if (!AppStorage.can('finance')) { box.innerHTML = ''; return; }
     const data = AppStorage.loadData();
     const month = AppStorage.currentMonth();
     const dues = (data.monthlyContributions || []).filter((d) => d.month === month);
@@ -287,14 +294,14 @@ ${second.text}`;
   },
 
   async approveMatched() {
-    if (!AppStorage.isAdmin()) return;
+    if (!AppStorage.can('finance')) return;
     const data = AppStorage.loadData();
     const month = AppStorage.currentMonth();
     const list = (data.monthlyContributions || []).filter((d) => d.month === month && d.status === 'pending' && d.billImage && !this.isStale(d) &&
       d.verify.state === 'match' && !this.duplicateOf(d, data.monthlyContributions));
     if (!list.length) return;
     const names = list.map((d) => ((data.members || []).find((m) => m.id === d.memberId) || {}).name || 'Thành viên');
-    if (!confirm(`Duyệt ${list.length} phiếu đã khớp?\n\n${names.join(', ')}\n\nĐối chiếu tự động chỉ kiểm tra ảnh nhất quán, không thay thế việc xem sao kê khi nghi ngờ.`)) return;
+    if (!(await App.confirm(`Duyệt ${list.length} phiếu đã khớp?\n\n${names.join(', ')}\n\nĐối chiếu tự động chỉ kiểm tra ảnh nhất quán, không thay thế việc xem sao kê khi nghi ngờ.`))) return;
     const user = AppStorage.getCurrentUser();
     const approver = (user && user.name) || 'Ban quản trị CLB';
     const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ');

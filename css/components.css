@@ -1042,3 +1042,6 @@ body.is-guest #header-user-section { border-left: 0 !important; padding-left: 0 
 .guest-card-link:hover b { text-decoration: underline; }
 /* Màn hình rộng (thanh bên luôn hiện): nút đăng nhập ở thanh đầu trang bị ẩn để khỏi trùng với thanh bên */
 @media (min-width: 993px) { body.is-guest #header-auth-btn-wrapper { display: none; } }
+.skip-link { position: absolute; left: -999px; top: 0; z-index: 10001; background: var(--primary); color: #fff; padding: 0.5rem 1rem; border-radius: 0 0 8px 0; }
+.skip-link:focus { left: 0; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

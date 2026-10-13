@@ -41,6 +41,8 @@ const SettingsModule = {
       setCheck('set-email-vote-open', mail.voteOpen !== false);
       setCheck('set-email-booked', mail.booked !== false);
       setCheck('set-email-court-full', mail.courtFull !== false);
+      setCheck('set-email-due', !!mail.dueReminder);
+      this.setValue('set-email-due-day', mail.dueReminderDay || 10);
       this.setValue('set-email-court-per', mail.courtFullPerCourt || 6);
       setCheck('set-email-cancelled', mail.cancelled !== false);
       setCheck('set-email-fixed-request', mail.fixedRequest !== false);
@@ -58,6 +60,7 @@ const SettingsModule = {
       this.setValue('set-push-vapid', pushCfg.vapidKey || '');
       this.refreshPushStatus();
       this.renderDeviceBackups();
+      if (window.RolesModule) RolesModule.renderPanel();
 
       const autoApproveToggle = document.getElementById('set-auto-approve');
       if (autoApproveToggle) {
@@ -175,13 +178,13 @@ const SettingsModule = {
   },
 
   async deleteDeviceBackup(id) {
-    if (!confirm('Xóa bản sao này khỏi thiết bị? Không ảnh hưởng dữ liệu trên máy chủ.')) return;
+    if (!(await App.confirm('Xóa bản sao này khỏi thiết bị? Không ảnh hưởng dữ liệu trên máy chủ.'))) return;
     if (await AppStorage.deleteLocalBackup(id)) App.showToast('🗑️ Đã xóa bản sao', 'success');
     this.renderDeviceBackups();
   },
 
   async restoreDeviceBackup(id) {
-    if (!confirm('Gửi bản sao này lên máy chủ?\n\nMáy chủ sẽ HỢP NHẤT: chỉ lấy lại dữ liệu bị thiếu hoặc cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò.')) return;
+    if (!(await App.confirm('Gửi bản sao này lên máy chủ?\n\nMáy chủ sẽ HỢP NHẤT: chỉ lấy lại dữ liệu bị thiếu hoặc cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò.'))) return;
     const res = await AppStorage.restoreLocalBackupToServer(id);
     App.showToast(res.message, res.success ? 'success' : 'warning');
     this.renderDeviceBackups();
@@ -268,6 +271,8 @@ const SettingsModule = {
         voteOpen: checked('set-email-vote-open'),
         booked: checked('set-email-booked'),
         courtFull: checked('set-email-court-full'),
+        dueReminder: checked('set-email-due'),
+        dueReminderDay: parseInt(document.getElementById('set-email-due-day')?.value) || 10,
         courtFullPerCourt: parseInt(document.getElementById('set-email-court-per')?.value) || 6,
         cancelled: checked('set-email-cancelled'),
         fixedRequest: checked('set-email-fixed-request'),
@@ -391,13 +396,13 @@ const SettingsModule = {
   },
 
   // Toggle giữa CSDL Vận hành thực tế và CSDL Dữ liệu thử nghiệm (Chỉ Admin)
-  switchDatabaseEnvironment(mode) {
+  async switchDatabaseEnvironment(mode) {
     const isTest = mode === 'test';
     const confirmMsg = isTest 
       ? "Chuyển sang chế độ CSDL KIỂM THỬ (TEST DEMO) với dữ liệu mẫu 10 thành viên và các buổi đánh thử nghiệm?" 
       : "Chuyển sang chế độ CSDL VẬN HÀNH THỰC TẾ (PRODUCTION)?";
 
-    if (!confirm(confirmMsg)) return;
+    if (!(await App.confirm(confirmMsg))) return;
 
     const updated = AppStorage.switchDatabaseMode(mode);
     App.showToast(`Đã chuyển sang môi trường: ${isTest ? 'CSDL Kiểm thử (Test Demo)' : 'CSDL Vận hành thực tế (Production)'}`, "success");
@@ -517,7 +522,7 @@ const SettingsModule = {
       App.showAuthModal('login');
       return;
     }
-    if (!confirm("⚠️ BẠN CÓ CHẮC CHẮN MUỐN ĐẶT LẠI CSDL SẠCH MẶC ĐỊNH?\n\nToàn bộ danh sách thành viên, ca đánh, quỹ tháng và sổ thu chi sẽ được đưa về 0 và đồng bộ làm sạch ngay trên database.")) {
+    if (!(await App.confirm("⚠️ BẠN CÓ CHẮC CHẮN MUỐN ĐẶT LẠI CSDL SẠCH MẶC ĐỊNH?\n\nToàn bộ danh sách thành viên, ca đánh, quỹ tháng và sổ thu chi sẽ được đưa về 0 và đồng bộ làm sạch ngay trên database."))) {
       return;
     }
     await AppStorage.resetData(true);

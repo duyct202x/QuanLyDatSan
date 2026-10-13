@@ -48,10 +48,11 @@
 
   <!-- Application Stylesheets -->
   <!-- BUNDLE:CSS:START -->
-  <link rel="stylesheet" href="css/bundle.css?v=798a6bd6d8">
+  <link rel="stylesheet" href="css/bundle.css?v=dd82ff5d28">
   <!-- BUNDLE:CSS:END -->
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Bỏ qua tới nội dung chính</a>
 
   <div class="app-container">
     <!-- Sidebar Backdrop for Mobile -->
@@ -98,8 +99,8 @@
         </a>
 
         <!-- Admin Only Tools -->
-        <div class="nav-section-title admin-only">Quản trị CLB</div>
-        <a href="#bill-splitter" class="nav-link admin-only" data-tab="bill-splitter">
+        <div class="nav-section-title admin-only" data-perm="any">Quản trị CLB</div>
+        <a href="#bill-splitter" class="nav-link admin-only" data-perm="finance" data-tab="bill-splitter">
           <i class="fas fa-calculator"></i>
           <span>Chia tiền sân (Admin)</span>
         </a>
@@ -133,7 +134,7 @@
     </aside>
 
     <!-- Main Content Area -->
-    <main class="main-content">
+    <main class="main-content" id="main-content">
       <!-- Top Sticky Header -->
       <header class="top-header">
         <div class="flex items-center gap-3">
@@ -198,7 +199,7 @@
                   </p>
                 </div>
                 <div class="flex gap-2" style="flex-shrink: 0;">
-                  <button class="btn btn-primary admin-only" onclick="ScheduleModule.openAddSessionModal()">
+                  <button class="btn btn-primary admin-only" data-perm="schedule" onclick="ScheduleModule.openAddSessionModal()">
                     <i class="fas fa-plus"></i> Đặt lịch mới
                   </button>
                   <button class="btn btn-secondary" onclick="App.openTab('fund')">
@@ -285,7 +286,7 @@
               </p>
             </div>
             <div class="sched-header-action">
-              <button class="btn btn-primary btn-sm admin-only" onclick="ScheduleModule.openAddSessionModal()">
+              <button class="btn btn-primary btn-sm admin-only" data-perm="schedule" onclick="ScheduleModule.openAddSessionModal()">
                 <i class="fas fa-plus-circle"></i> <span>Đặt lịch mới</span>
               </button>
             </div>
@@ -421,7 +422,7 @@
               </p>
             </div>
             <div class="tab-header-actions">
-              <button class="btn btn-outline-primary btn-sm admin-only" onclick="FundModule.openSetFeeModal()" title="Admin: Cài đặt số tiền cần đóng quỹ mỗi tháng">
+              <button class="btn btn-outline-primary btn-sm admin-only" data-perm="finance" onclick="FundModule.openSetFeeModal()" title="Admin: Cài đặt số tiền cần đóng quỹ mỗi tháng">
                 <i class="fas fa-cog"></i> <span>Cài đặt mức quỹ</span>
               </button>
               <button class="btn btn-primary btn-sm" onclick="FundModule.openPaymentModal((AppStorage.getCurrentUser() && AppStorage.getCurrentUser().id) || '')">
@@ -429,6 +430,9 @@
               </button>
               <button class="btn btn-secondary btn-sm" onclick="FundModule.sendReminderMessage()">
                 <i class="fas fa-bell"></i> <span>Nhắc quỹ</span>
+              </button>
+              <button class="btn btn-secondary btn-sm admin-only" data-perm="finance" onclick="FundModule.exportDuesCSV()" title="Xuất báo cáo quỹ tháng ra CSV">
+                <i class="fas fa-file-csv"></i> <span>Xuất CSV</span>
               </button>
             </div>
           </div>
@@ -618,10 +622,10 @@
               </p>
             </div>
             <div class="settings-action-grid">
-              <button class="btn btn-primary btn-sm admin-only" onclick="MembersModule.openAddMemberModal()" title="Thêm thành viên mới vào CLB">
+              <button class="btn btn-primary btn-sm admin-only" data-perm="members" onclick="MembersModule.openAddMemberModal()" title="Thêm thành viên mới vào CLB">
                 <i class="fas fa-user-plus"></i> <span>Thêm thành viên</span>
               </button>
-              <button class="btn btn-secondary btn-sm admin-only" onclick="MembersModule.copyMemberList()" title="Sao chép danh bạ thành viên gửi Zalo">
+              <button class="btn btn-secondary btn-sm admin-only" data-perm="members" onclick="MembersModule.copyMemberList()" title="Sao chép danh bạ thành viên gửi Zalo">
                 <i class="fas fa-copy"></i> <span>Sao chép SĐT</span>
               </button>
             </div>
@@ -808,6 +812,9 @@
           <!-- Bản sao lưu dữ liệu trên thiết bị (Ban quản trị) -->
           <div id="device-backups-panel" class="admin-only"></div>
 
+          <!-- Vai trò & quyền (chỉ Admin) -->
+          <div id="roles-panel" class="admin-only"></div>
+
           <div class="responsive-2col-layout">
             <!-- Club Config Form -->
             <div class="card">
@@ -902,8 +909,8 @@
                 <div class="form-group" style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
                   <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;">
                     <div>
-                      <div class="font-bold" style="font-size: 0.92rem;"><i class="fas fa-stopwatch text-primary"></i> Tự động mở bình chọn</div>
-                      <div class="text-secondary" style="font-size: 0.78rem;">Khi tạo buổi đánh, mặc định hẹn giờ mở vote và thông báo cho thành viên đúng giờ.</div>
+                      <div class="font-bold" style="font-size: 0.92rem;"><i class="fas fa-stopwatch text-primary"></i> Giờ mở bình chọn mặc định (buổi tạo tay)</div>
+                      <div class="text-secondary" style="font-size: 0.78rem;">Chỉ điền sẵn giờ mở vote khi bạn tạo buổi thủ công. Buổi lặp lại hằng tuần/tháng nên dùng <b>Lịch bình chọn tự động</b> (mỗi lịch có quy tắc riêng). Có thể chỉnh giờ riêng cho từng buổi.</div>
                     </div>
                     <label class="switch">
                       <input type="checkbox" id="set-auto-vote-open">
@@ -968,6 +975,11 @@
                   <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.4rem 1rem; margin-top: 0.75rem; font-size: 0.85rem;">
                     <label><input type="checkbox" id="set-email-vote-open" checked> Mở bình chọn</label>
                     <label><input type="checkbox" id="set-email-booked" checked> Đặt sân thành công (người đã vote)</label>
+                    <label><input type="checkbox" id="set-email-due"> Nhắc đóng quỹ tháng, từ ngày
+                      <select id="set-email-due-day" class="form-select" style="display: inline-block; width: auto; padding: 0.1rem 1.6rem 0.1rem 0.4rem; margin: 0 0.25rem;">
+                        <option value="5">5</option><option value="10" selected>10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option>
+                      </select>(chỉ người chưa đóng)
+                    </label>
                     <label><input type="checkbox" id="set-email-court-full" checked> Đủ người cho số sân (báo người mở vote), từ
                       <select id="set-email-court-per" class="form-select" style="display: inline-block; width: auto; padding: 0.1rem 1.6rem 0.1rem 0.4rem; margin: 0 0.25rem;">
                         <option value="4">4</option><option value="5">5</option><option value="6" selected>6</option><option value="7">7</option><option value="8">8</option>
@@ -1310,11 +1322,11 @@
   </div>
 
   <!-- Global Modal Dialog Overlay -->
-  <div class="modal-overlay" id="global-modal-overlay">
+  <div class="modal-overlay" id="global-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="global-modal-title">
     <div class="modal-dialog" id="global-modal-dialog">
       <div class="modal-header">
         <h3 class="modal-title" id="global-modal-title">Tiêu đề</h3>
-        <button style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.25rem;" onclick="App.closeModal()">&times;</button>
+        <button type="button" aria-label="Đóng hộp thoại" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.25rem;" onclick="App.closeModal()">&times;</button>
       </div>
       <div class="modal-body" id="global-modal-body">
         <!-- Injected dynamically -->
@@ -1327,7 +1339,7 @@
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
   <!-- BUNDLE:JS:START -->
-  <script src="js/bundle.js?v=7795fb54d4"></script>
+  <script src="js/bundle.js?v=65042051d6"></script>
   <!-- BUNDLE:JS:END -->
 
 </body>

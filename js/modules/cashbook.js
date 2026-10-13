@@ -7,7 +7,7 @@ const CashbookModule = {
   renderCashbook() {
     const data = AppStorage.loadData();
     const txs = data.transactions || [];
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
     
     // Sắp xếp giao dịch mới nhất lên đầu
     const sortedTxs = [...txs].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -138,7 +138,7 @@ const CashbookModule = {
   },
 
   openAddTransactionModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -206,7 +206,7 @@ const CashbookModule = {
 
   async saveTransaction(e) {
     if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -282,7 +282,7 @@ const CashbookModule = {
   // CHỈNH SỬA GIAO DỊCH THU CHI (ADMIN)
   // ==========================================
   openEditTransactionModal(txId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền chỉnh sửa giao dịch thu chi!", "warning");
       return;
     }
@@ -361,7 +361,7 @@ const CashbookModule = {
 
   async saveEditTransaction(e, txId) {
     if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền chỉnh sửa giao dịch thu chi!", "warning");
       return;
     }
@@ -432,7 +432,7 @@ const CashbookModule = {
   // XÓA GIAO DỊCH THU CHI (ADMIN)
   // ==========================================
   async deleteTransaction(txId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền xóa giao dịch thu chi!", "warning");
       return;
     }
@@ -445,7 +445,7 @@ const CashbookModule = {
     }
 
     const amountFormatted = Number(t.amount).toLocaleString('vi-VN');
-    if (!confirm(`Bạn có chắc chắn muốn xóa giao dịch "${t.title}" (${t.type === 'income' ? '+' : '-'}${amountFormatted} đ) khỏi sổ quỹ không?\nThao tác này sẽ đồng bộ trực tiếp lên Cloud.`)) {
+    if (!(await App.confirm(`Bạn có chắc chắn muốn xóa giao dịch "${t.title}" (${t.type === 'income' ? '+' : '-'}${amountFormatted} đ) khỏi sổ quỹ không?\nThao tác này sẽ đồng bộ trực tiếp lên Cloud.`))) {
       return;
     }
 
@@ -474,20 +474,9 @@ const CashbookModule = {
   exportCSV() {
     const data = AppStorage.loadData();
     const txs = data.transactions || [];
-    let csv = "\uFEFFNgày,Loại,Danh mục,Tiêu đề,Số tiền (VNĐ),Người ghi,Ghi chú\n";
-
-    txs.forEach(t => {
-      const typeStr = t.type === 'income' ? 'Thu' : 'Chi';
-      csv += `"${t.date}","${typeStr}","${t.category}","${t.title}","${t.amount}","${t.createdBy || ''}","${t.note || ''}"\n`;
-    });
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `smash_pro_so_quy_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    Csv.download(`smash_pro_so_quy_${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Ngày', 'Loại', 'Danh mục', 'Tiêu đề', 'Số tiền (VNĐ)', 'Người ghi', 'Ghi chú'],
+      txs.map(t => [t.date, t.type === 'income' ? 'Thu' : 'Chi', t.category, t.title, t.amount, t.createdBy || '', t.note || '']));
     App.showToast("Đã xuất file báo cáo thu chi CSV thành công!", "success");
   }
 };

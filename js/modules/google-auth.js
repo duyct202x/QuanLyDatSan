@@ -135,7 +135,7 @@ const GoogleAuth = {
   },
 
   async unlink() {
-    if (!confirm('Hủy liên kết Google? Sau đó bạn chỉ đăng nhập được bằng mật khẩu.')) return;
+    if (!(await App.confirm('Hủy liên kết Google? Sau đó bạn chỉ đăng nhập được bằng mật khẩu.'))) return;
     const res = await AppStorage.googleUnlink();
     App.showToast(res.message, res.success ? 'success' : 'error');
     if (res.success && App.openUserProfileModal) App.openUserProfileModal();

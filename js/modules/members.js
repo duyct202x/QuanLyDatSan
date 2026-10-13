@@ -19,7 +19,7 @@ const MembersModule = {
     const members = data.members || [];
     const dues = data.monthlyContributions || [];
     const currentMonth = AppStorage.currentMonth();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('members');
 
     // 1. Tính toán số liệu thống kê (KPIs)
     const fixedMembers = members.filter(m => m.type === 'fixed');
@@ -119,6 +119,8 @@ const MembersModule = {
     container.innerHTML = filtered.map(m => {
       const isFixed = m.type === 'fixed';
       const isAdminRole = m.role === 'admin';
+      const cardUser = (data.users || []).find(u => u.memberId === m.id || (m.username && u.username === m.username));
+      const customRole = cardUser ? AppStorage.getRole(cardUser.roleId) : null;
       const isTreasurerRole = m.role === 'treasurer';
       const cleanPhone = (m.phone || '').replace(/\D/g, '');
       const memberDue = isFixed ? dues.find(d => d.memberId === m.id && d.month === currentMonth) : null;
@@ -151,7 +153,7 @@ const MembersModule = {
               <div class="flex flex-col items-end gap-1">
                 <span class="badge ${isAdminRole ? 'badge-warning' : isTreasurerRole ? 'badge-info' : 'badge-neutral'}" style="font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.45rem;">
                   <i class="fas ${isAdminRole ? 'fa-crown' : isTreasurerRole ? 'fa-wallet' : 'fa-user'}"></i>
-                  ${isAdminRole ? 'Admin CLB' : isTreasurerRole ? 'Thủ quỹ' : 'Thành viên'}
+                  ${isAdminRole ? 'Admin CLB' : isTreasurerRole ? 'Thủ quỹ' : customRole ? Safe.html(customRole.name) : 'Thành viên'}
                 </span>
                 <span class="badge ${isFixed ? 'badge-paid' : 'badge-warning'}" style="font-size: 0.65rem; padding: 0.1rem 0.4rem;">
                   ${isFixed ? '🏸 Cố định' : '⚡ Vãng lai'}
@@ -255,7 +257,7 @@ const MembersModule = {
     const data = AppStorage.loadData();
     const m = (data.members || []).find(mem => mem.id === memberId);
     if (!m) return;
-    if (AppStorage.isAdmin()) {
+    if (AppStorage.can('members')) {
       this.openEditMemberModal(memberId);
     } else if (AppStorage.canViewMemberContact(m.id, m.phone)) {
       App.openUserProfileModal();
@@ -320,7 +322,7 @@ const MembersModule = {
   },
 
   openAddMemberModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng thêm thành viên trực tiếp chỉ dành cho Ban Quản trị CLB. Vui lòng đăng nhập!", "warning");
       App.showAuthModal('login');
       return;
@@ -414,7 +416,7 @@ const MembersModule = {
   },
 
   openEditMemberModal(memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng chỉnh sửa thành viên chỉ dành cho Ban Quản trị CLB!", "warning");
       return;
     }
@@ -457,13 +459,23 @@ const MembersModule = {
           </div>
           <div class="form-group">
             <label class="form-label font-bold">Vai trò</label>
-            <select id="edit-mem-role" class="form-select">
+            <select id="edit-mem-role" class="form-select" ${AppStorage.isSuperAdmin() ? '' : 'disabled title="Chỉ Quản trị viên được đổi vai trò hệ thống"'}>
               <option value="member" ${m.role === 'member' ? 'selected' : ''}>Thành viên</option>
               <option value="treasurer" ${m.role === 'treasurer' ? 'selected' : ''}>Thủ quỹ</option>
               <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Quản trị viên</option>
             </select>
           </div>
         </div>
+
+        ${AppStorage.isSuperAdmin() && user.username && AppStorage.getRoles().length ? `
+        <div class="form-group">
+          <label class="form-label font-bold"><i class="fas fa-user-shield text-primary"></i> Vai trò tùy chỉnh (quyền được giao)</label>
+          <select id="edit-mem-role-id" class="form-select">
+            <option value="">— Không có —</option>
+            ${AppStorage.getRoles().map(r => `<option value="${Safe.html(r.id)}" ${user.roleId === r.id ? 'selected' : ''}>${Safe.html(r.name)} (${(r.perms || []).map(p => Safe.html(AppStorage.PERM_LABELS[p] || p)).join(', ') || 'chưa có quyền'})</option>`).join('')}
+          </select>
+          <span class="text-secondary" style="font-size: 0.78rem;">Quản lý vai trò tại Cài đặt → Vai trò & quyền. Chỉ áp dụng cho thành viên thường.</span>
+        </div>` : ''}
 
         ${AppStorage.isSuperAdmin() && user.username ? `
         <label class="form-group" style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
@@ -555,6 +567,11 @@ const MembersModule = {
       user.role = m.role;
       user.type = m.type;
       if (avatar) user.avatar = avatar;
+      const roleSel = document.getElementById('edit-mem-role-id');
+      if (roleSel && AppStorage.isSuperAdmin()) {
+        if (roleSel.value && m.role === 'member') user.roleId = roleSel.value;
+        else delete user.roleId;
+      }
       const canSchedule = document.getElementById('edit-mem-can-schedule');
       if (canSchedule && AppStorage.isSuperAdmin()) {
         if (canSchedule.checked) user.canScheduleVotes = true;
@@ -602,8 +619,8 @@ const MembersModule = {
     if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 
-  deleteMember(memberId) {
-    if (!AppStorage.isAdmin()) {
+  async deleteMember(memberId) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng xóa thành viên chỉ dành cho Ban Quản trị CLB!", "warning");
       return;
     }
@@ -612,7 +629,7 @@ const MembersModule = {
     const member = (data.members || []).find(m => m.id === memberId);
     const memberName = member ? member.name : "thành viên";
 
-    if (!confirm(`Bạn có chắc chắn muốn xóa "${memberName}" khỏi danh sách CLB?\n(Lưu ý: Tài khoản và dữ liệu đóng quỹ tương ứng sẽ được dọn sạch)`)) {
+    if (!(await App.confirm(`Bạn có chắc chắn muốn xóa "${memberName}" khỏi danh sách CLB?\n(Lưu ý: Tài khoản và dữ liệu đóng quỹ tương ứng sẽ được dọn sạch)`))) {
       return;
     }
 
@@ -652,7 +669,7 @@ const MembersModule = {
   renderJoinCard() {
     const body = document.getElementById('join-card-body');
     if (!body) return;
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('members');
     const title = document.getElementById('join-card-title');
     const tabBtn = document.getElementById('subtab-btn-members-reg');
     if (tabBtn) tabBtn.innerHTML = isAdmin ? '<i class="fas fa-user-plus"></i> Thêm thành viên' : '<i class="fas fa-id-card"></i> Điều khoản & Đăng ký';
@@ -716,7 +733,7 @@ const MembersModule = {
   // Tạo thành viên (dùng chung cho form nhanh và hộp thoại "Thêm thành viên").
   // createAccount=false -> chỉ ghi tên (không có tài khoản/mật khẩu); true -> bắt buộc mật khẩu hợp lệ do Admin đặt.
   createMember({ name, phone, email = '', note = '', type = 'guest', role = 'member', avatar = '', createAccount = false, password = '' }) {
-    if (!AppStorage.isAdmin()) return { success: false, message: 'Chỉ Ban quản trị mới được thêm thành viên.' };
+    if (!AppStorage.can('members')) return { success: false, message: 'Chỉ Ban quản trị mới được thêm thành viên.' };
     name = String(name || '').trim();
     phone = String(phone || '').trim();
     const cleanPhone = phone.replace(/\D/g, '');
@@ -828,7 +845,7 @@ const MembersModule = {
   },
 
   copyMemberList() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng sao chép danh sách liên hệ thành viên chỉ dành cho Ban Quản trị!", "warning");
       return;
     }
@@ -891,7 +908,7 @@ const MembersModule = {
   },
 
   openEditBenefitsAndRulesModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng chỉnh sửa Quyền lợi & Quy định CLB chỉ dành cho Ban Quản trị!", "warning");
       return;
     }

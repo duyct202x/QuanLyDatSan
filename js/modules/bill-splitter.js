@@ -307,7 +307,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
   },
 
   toggleAttendance(key, attending) {
-    if (!AppStorage.isAdmin() || !this.currentSessionId) return;
+    if (!AppStorage.can('finance') || !this.currentSessionId) return;
     const data = AppStorage.loadData();
     const session = (data.sessions || []).find(s => s.id === this.currentSessionId);
     if (!session) return;
@@ -328,7 +328,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
   },
 
   async togglePaid(key) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền xác nhận thu tiền!", "warning");
       return;
     }
@@ -373,7 +373,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
 
   // Lưu cấu hình chia tiền vào buổi đánh + ghi khoản chi vào sổ quỹ
   async saveBill() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi sổ quỹ!", "warning");
       return;
     }

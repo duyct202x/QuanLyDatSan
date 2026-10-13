@@ -16,14 +16,14 @@ const FundModule = {
     const data = AppStorage.loadData();
     let members = (data.members || []).filter(m => m.type === 'fixed');
     // Thành viên thường (không phải Admin/Thủ quỹ) chỉ xem tình trạng quỹ của chính mình
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       const me = AppStorage.getCurrentUser();
       members = members.filter(m => me && (m.id === me.memberId || (me.username && m.username === me.username)));
     }
     const dues = data.monthlyContributions || [];
     const defaultMonthlyFee = this.getClubFee(data);
     const currentUser = AppStorage.getCurrentUser();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
 
     const fixedMemberIds = new Set(members.map(m => m.id));
 
@@ -156,7 +156,7 @@ const FundModule = {
 
     const data = AppStorage.loadData();
     const currentUser = AppStorage.getCurrentUser();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
     const defaultMonthlyFee = this.getClubFee(data);
 
     let filtered = monthDues;
@@ -243,7 +243,7 @@ const FundModule = {
           </td>
           <td>
             ${canViewDetails ? (due.billImage ? `
-              <button class="btn btn-secondary btn-sm" onclick="FundModule.previewBill(${Safe.js(due.billImage)}, ${Safe.js(member.name)})">
+              <button class="btn btn-secondary btn-sm" onclick="FundModule.previewBill(${Safe.js(due.id || '')}, ${Safe.js(member.name)})">
                 <i class="fas fa-image"></i> Xem biên lai
               </button>
             ` : `<span class="text-muted" style="font-size: 0.8rem;">Không có</span>`) : `<span class="text-muted font-mono">-</span>`}
@@ -284,7 +284,7 @@ const FundModule = {
 
   // Modal cho Admin cài đặt mức quỹ tháng chung của CLB
   openSetFeeModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền cài đặt số tiền quỹ tháng!", "warning");
       App.showAuthModal('login');
       return;
@@ -329,7 +329,7 @@ const FundModule = {
 
   async saveClubFee(e) {
     e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền cài đặt số tiền quỹ tháng!", "warning");
       return;
     }
@@ -370,7 +370,7 @@ const FundModule = {
 
   // Modal cho Admin chỉnh sửa riêng mức đóng của 1 thành viên
   openEditMemberDueModal(dueId, memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền sửa số tiền nộp của thành viên!", "warning");
       App.showAuthModal('login');
       return;
@@ -425,7 +425,7 @@ const FundModule = {
 
   async saveMemberDueAmount(e, dueId, memberId) {
     e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền sửa số tiền nộp của thành viên!", "warning");
       return;
     }
@@ -488,7 +488,7 @@ const FundModule = {
   },
 
   setFilter(filter) {
-    if (!AppStorage.isAdmin() && filter !== 'all') {
+    if (!AppStorage.can('finance') && filter !== 'all') {
       App.showToast("Bộ lọc theo trạng thái đóng quỹ chi tiết chỉ dành cho Quản trị viên!", "info");
       return;
     }
@@ -731,7 +731,7 @@ const FundModule = {
   },
 
   async approveDue(dueIdOrMemberId, isApproved) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền duyệt đóng quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -798,7 +798,7 @@ const FundModule = {
   },
 
   async markPaidCash(memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi nhận thu tiền mặt!", "warning");
       App.showAuthModal('login');
       return;
@@ -873,7 +873,7 @@ const FundModule = {
   },
 
   async resetDueStatus(memberId) {
-    if (!confirm("Bạn có chắc chắn muốn chuyển trạng thái thành viên này về Chưa đóng?\nGiao dịch thu quỹ tương ứng trong Sổ quỹ sẽ tự động được thu hồi/xóa.")) return;
+    if (!(await App.confirm("Bạn có chắc chắn muốn chuyển trạng thái thành viên này về Chưa đóng?\nGiao dịch thu quỹ tương ứng trong Sổ quỹ sẽ tự động được thu hồi/xóa."))) return;
     const data = AppStorage.loadData();
     let due = (data.monthlyContributions || []).find(d => d.memberId === memberId && d.month === this.currentMonth);
     if (due) {
@@ -901,17 +901,36 @@ const FundModule = {
     }
   },
 
-  previewBill(imageUrl, memberName) {
+  async previewBill(dueId, memberName) {
+    const due = ((AppStorage.loadData().monthlyContributions) || []).find(d => d.id === dueId);
     const modalBody = `
       <div class="text-center">
         <h4 style="margin-bottom: 1rem;">Biên lai chuyển khoản của <strong>${Safe.html(memberName)}</strong></h4>
-        <img src="${Safe.url(imageUrl)}" alt="Biên lai thanh toán" style="max-width: 100%; max-height: 480px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+        <img id="bill-preview-modal-img" alt="Biên lai thanh toán" style="max-width: 100%; max-height: 480px; min-height: 40px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
         <div style="margin-top: 1.25rem;">
           <button class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
         </div>
       </div>
     `;
     App.openModal("🧾 Ảnh biên lai chuyển khoản", modalBody);
+    const img = await AppStorage.getBill(due);
+    const el = document.getElementById('bill-preview-modal-img');
+    if (!el) return;
+    if (img) el.src = Safe.url(img);
+    else el.replaceWith(Object.assign(document.createElement('div'), { className: 'text-secondary', textContent: 'Không tải được ảnh biên lai.' }));
+  },
+
+  // Báo cáo quỹ: mỗi dòng là phiếu quỹ của một thành viên trong một tháng (lọc theo cột "Tháng" trong Excel/Sheets)
+  exportDuesCSV() {
+    if (!AppStorage.can('finance')) { App.showToast('Bạn không có quyền xuất báo cáo quỹ.', 'warning'); return; }
+    const data = AppStorage.loadData();
+    const names = new Map((data.members || []).map(m => [m.id, m.name]));
+    const statusText = { paid: 'Đã đóng', pending: 'Chờ duyệt', unpaid: 'Chưa đóng' };
+    const dues = (data.monthlyContributions || []).slice().sort((a, b) => String(b.month).localeCompare(String(a.month)) || String(names.get(a.memberId) || '').localeCompare(String(names.get(b.memberId) || '')));
+    Csv.download(`smash_pro_quy_thang_${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Tháng', 'Thành viên', 'Số tiền (VNĐ)', 'Trạng thái', 'Ngày đóng', 'Hình thức', 'Người duyệt'],
+      dues.map(d => [d.month, names.get(d.memberId) || d.memberId, d.amount || 0, statusText[d.status] || d.status, d.paidAt || '', d.method || '', d.approvedBy || '']));
+    App.showToast(`Đã xuất báo cáo quỹ (${dues.length} dòng).`, 'success');
   },
 
   sendReminderMessage() {
@@ -954,7 +973,7 @@ ${unpaidNames}
     navigator.clipboard.writeText(reminderMsg).then(() => {
       App.showToast("Đã sao chép nội dung nhắc nhở quỹ vào Clipboard! Bạn có thể dán vào nhóm Zalo/Telegram ngay.", "success");
     }).catch(() => {
-      prompt("Sao chép nội dung nhắc nhở:", reminderMsg);
+      App.showText("Sao chép nội dung nhắc nhở:", reminderMsg);
     });
   }
 };

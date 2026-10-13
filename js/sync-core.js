@@ -20,7 +20,7 @@ var SyncCore = (function () {
   // Mảng con được hợp nhất theo từng phần tử -> 2 người bình chọn cùng lúc không mất phiếu của nhau
   var KEYED_ARRAYS = {
     sessions: { votes: 'memberId', voteHistory: 'id', options: 'id', notices: 'id' },
-    club: { benefitsAndRules: 'id', voteSchedules: 'id' }
+    club: { benefitsAndRules: 'id', voteSchedules: 'id', roles: 'id' }
   };
   var IGNORED_FIELDS = { updatedAt: true };
   var FLOOR = '0000000000000-0000-'; // Nhỏ hơn mọi HLC thật

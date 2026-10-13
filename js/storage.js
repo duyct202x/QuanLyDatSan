@@ -843,10 +843,61 @@ const AppStorage = {
     return !!(u && (u.role === 'admin' || u.role === 'treasurer'));
   },
 
+  // Ảnh biên lai: máy chủ gửi dấu "@bill:<khóa>" thay cho ảnh (nặng); tải ảnh thật khi cần và nhớ trong phiên
+  BILL_MARK: '@bill:',
+  _billCache: new Map(),
+
+  isBillMarker(v) {
+    return typeof v === 'string' && v.startsWith(this.BILL_MARK);
+  },
+
+  async getBill(due) {
+    const v = due && due.billImage;
+    if (!v) return '';
+    if (!this.isBillMarker(v)) return v;
+    const cacheKey = `${due.id}|${v}`;
+    if (this._billCache.has(cacheKey)) return this._billCache.get(cacheKey);
+    const session = this._readSession();
+    const res = await this._authRequest({ action: 'billImage', token: session && session.token, dueId: due.id });
+    const img = res && res.status === 'ok' && typeof res.image === 'string' ? res.image : '';
+    if (img) this._billCache.set(cacheKey, img);
+    return img;
+  },
+
+  // Quyền được giao theo vai trò tùy chỉnh (clubInfo.roles + users[].roleId). Ban quản trị luôn có đủ quyền.
+  // Giao diện chỉ để ẩn/hiện nút; máy chủ mới là nơi kiểm quyền thật.
+  PERMS: ['schedule', 'members', 'finance'],
+  PERM_LABELS: {
+    schedule: 'Quản lý lịch & buổi đánh',
+    members: 'Quản lý thành viên',
+    finance: 'Quản lý quỹ & sổ thu chi'
+  },
+
+  perms() {
+    const u = this.getCurrentUser();
+    if (!u) return [];
+    if (u.role === 'admin' || u.role === 'treasurer') return this.PERMS.slice();
+    const role = this.getRole(u.roleId);
+    return role ? (role.perms || []).filter((p) => this.PERMS.includes(p)) : [];
+  },
+
+  can(perm) {
+    return this.perms().includes(perm);
+  },
+
+  getRoles() {
+    const info = (this.loadData().clubInfo) || {};
+    return Array.isArray(info.roles) ? info.roles.filter((r) => r && r.id && r.name) : [];
+  },
+
+  getRole(roleId) {
+    return roleId ? this.getRoles().find((r) => r.id === roleId) || null : null;
+  },
+
   // Quyền lên lịch bình chọn tự động / hẹn giờ mở vote: Ban quản trị hoặc thành viên được Admin chỉ định
   canScheduleVotes() {
     const u = this.getCurrentUser();
-    return !!(u && (u.role === 'admin' || u.role === 'treasurer' || u.canScheduleVotes === true));
+    return !!(u && (u.role === 'admin' || u.role === 'treasurer' || u.canScheduleVotes === true || this.can('schedule')));
   },
 
   // Kiểm tra quyền Super Admin
@@ -872,7 +923,7 @@ const AppStorage = {
   isFixedMember() {
     const u = this.getCurrentUser();
     if (!u) return false;
-    return u.role === 'admin' || u.role === 'treasurer' || u.type === 'fixed';
+    return u.role === 'admin' || u.role === 'treasurer' || u.type === 'fixed' || this.can('finance');
   },
 
   // Quyền xem sổ quỹ & báo cáo tài chính CLB (Chỉ dành cho Thành viên cố định & Ban quản trị)
@@ -882,13 +933,13 @@ const AppStorage = {
 
   // Quyền quản lý thành viên khác (Thêm, Sửa, Xóa, Duyệt, Đặt lại mật khẩu - Chỉ Ban quản trị)
   canManageMembers() {
-    return this.isAdmin();
+    return this.can('members');
   },
 
   // Kiểm tra quyền xem thông tin liên hệ nhạy cảm (SĐT, Email) của một thành viên
   // Chỉ Quản trị viên HOẶC chính thành viên đó (Owner) mới được xem
   canViewMemberContact(targetMemberId = null, targetPhone = '') {
-    if (this.isAdmin()) return true;
+    if (this.isAdmin() || this.can('members')) return true;
     const u = this.getCurrentUser();
     if (!u) return false;
     if (targetMemberId && (u.id === targetMemberId || u.memberId === targetMemberId)) return true;

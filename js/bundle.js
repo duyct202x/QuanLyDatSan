@@ -65,7 +65,7 @@ var SyncCore = (function () {
   // Mảng con được hợp nhất theo từng phần tử -> 2 người bình chọn cùng lúc không mất phiếu của nhau
   var KEYED_ARRAYS = {
     sessions: { votes: 'memberId', voteHistory: 'id', options: 'id', notices: 'id' },
-    club: { benefitsAndRules: 'id', voteSchedules: 'id' }
+    club: { benefitsAndRules: 'id', voteSchedules: 'id', roles: 'id' }
   };
   var IGNORED_FIELDS = { updatedAt: true };
   var FLOOR = '0000000000000-0000-'; // Nhỏ hơn mọi HLC thật
@@ -2051,10 +2051,61 @@ const AppStorage = {
     return !!(u && (u.role === 'admin' || u.role === 'treasurer'));
   },
 
+  // Ảnh biên lai: máy chủ gửi dấu "@bill:<khóa>" thay cho ảnh (nặng); tải ảnh thật khi cần và nhớ trong phiên
+  BILL_MARK: '@bill:',
+  _billCache: new Map(),
+
+  isBillMarker(v) {
+    return typeof v === 'string' && v.startsWith(this.BILL_MARK);
+  },
+
+  async getBill(due) {
+    const v = due && due.billImage;
+    if (!v) return '';
+    if (!this.isBillMarker(v)) return v;
+    const cacheKey = `${due.id}|${v}`;
+    if (this._billCache.has(cacheKey)) return this._billCache.get(cacheKey);
+    const session = this._readSession();
+    const res = await this._authRequest({ action: 'billImage', token: session && session.token, dueId: due.id });
+    const img = res && res.status === 'ok' && typeof res.image === 'string' ? res.image : '';
+    if (img) this._billCache.set(cacheKey, img);
+    return img;
+  },
+
+  // Quyền được giao theo vai trò tùy chỉnh (clubInfo.roles + users[].roleId). Ban quản trị luôn có đủ quyền.
+  // Giao diện chỉ để ẩn/hiện nút; máy chủ mới là nơi kiểm quyền thật.
+  PERMS: ['schedule', 'members', 'finance'],
+  PERM_LABELS: {
+    schedule: 'Quản lý lịch & buổi đánh',
+    members: 'Quản lý thành viên',
+    finance: 'Quản lý quỹ & sổ thu chi'
+  },
+
+  perms() {
+    const u = this.getCurrentUser();
+    if (!u) return [];
+    if (u.role === 'admin' || u.role === 'treasurer') return this.PERMS.slice();
+    const role = this.getRole(u.roleId);
+    return role ? (role.perms || []).filter((p) => this.PERMS.includes(p)) : [];
+  },
+
+  can(perm) {
+    return this.perms().includes(perm);
+  },
+
+  getRoles() {
+    const info = (this.loadData().clubInfo) || {};
+    return Array.isArray(info.roles) ? info.roles.filter((r) => r && r.id && r.name) : [];
+  },
+
+  getRole(roleId) {
+    return roleId ? this.getRoles().find((r) => r.id === roleId) || null : null;
+  },
+
   // Quyền lên lịch bình chọn tự động / hẹn giờ mở vote: Ban quản trị hoặc thành viên được Admin chỉ định
   canScheduleVotes() {
     const u = this.getCurrentUser();
-    return !!(u && (u.role === 'admin' || u.role === 'treasurer' || u.canScheduleVotes === true));
+    return !!(u && (u.role === 'admin' || u.role === 'treasurer' || u.canScheduleVotes === true || this.can('schedule')));
   },
 
   // Kiểm tra quyền Super Admin
@@ -2080,7 +2131,7 @@ const AppStorage = {
   isFixedMember() {
     const u = this.getCurrentUser();
     if (!u) return false;
-    return u.role === 'admin' || u.role === 'treasurer' || u.type === 'fixed';
+    return u.role === 'admin' || u.role === 'treasurer' || u.type === 'fixed' || this.can('finance');
   },
 
   // Quyền xem sổ quỹ & báo cáo tài chính CLB (Chỉ dành cho Thành viên cố định & Ban quản trị)
@@ -2090,13 +2141,13 @@ const AppStorage = {
 
   // Quyền quản lý thành viên khác (Thêm, Sửa, Xóa, Duyệt, Đặt lại mật khẩu - Chỉ Ban quản trị)
   canManageMembers() {
-    return this.isAdmin();
+    return this.can('members');
   },
 
   // Kiểm tra quyền xem thông tin liên hệ nhạy cảm (SĐT, Email) của một thành viên
   // Chỉ Quản trị viên HOẶC chính thành viên đó (Owner) mới được xem
   canViewMemberContact(targetMemberId = null, targetPhone = '') {
-    if (this.isAdmin()) return true;
+    if (this.isAdmin() || this.can('members')) return true;
     const u = this.getCurrentUser();
     if (!u) return false;
     if (targetMemberId && (u.id === targetMemberId || u.memberId === targetMemberId)) return true;
@@ -3069,6 +3120,35 @@ const Safe = {
 window.Safe = Safe;
 ;
 
+// ===== js/csv-export.js =====
+// Csv - Xuất CSV an toàn: bọc dấu nháy, và vô hiệu hóa ô bắt đầu bằng = + - @ (chống chèn công thức khi mở bằng Excel/Sheets)
+const Csv = {
+  cell(v) {
+    let s = v === null || v === undefined ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  },
+
+  build(header, rows) {
+    return '\uFEFF' + [header].concat(rows).map((r) => r.map((c) => this.cell(c)).join(',')).join('\r\n') + '\r\n';
+  },
+
+  download(filename, header, rows) {
+    const blob = new Blob([this.build(header, rows)], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+};
+
+window.Csv = Csv;
+;
+
 // ===== js/modules/members.js =====
 // Members Management Module for SMASH PRO Badminton Management System
 // Hỗ trợ Danh sách thành viên, Tìm kiếm, Lọc theo loại hình/vai trò, Thêm/Sửa/Xóa và Đăng ký gia nhập
@@ -3091,7 +3171,7 @@ const MembersModule = {
     const members = data.members || [];
     const dues = data.monthlyContributions || [];
     const currentMonth = AppStorage.currentMonth();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('members');
 
     // 1. Tính toán số liệu thống kê (KPIs)
     const fixedMembers = members.filter(m => m.type === 'fixed');
@@ -3191,6 +3271,8 @@ const MembersModule = {
     container.innerHTML = filtered.map(m => {
       const isFixed = m.type === 'fixed';
       const isAdminRole = m.role === 'admin';
+      const cardUser = (data.users || []).find(u => u.memberId === m.id || (m.username && u.username === m.username));
+      const customRole = cardUser ? AppStorage.getRole(cardUser.roleId) : null;
       const isTreasurerRole = m.role === 'treasurer';
       const cleanPhone = (m.phone || '').replace(/\D/g, '');
       const memberDue = isFixed ? dues.find(d => d.memberId === m.id && d.month === currentMonth) : null;
@@ -3223,7 +3305,7 @@ const MembersModule = {
               <div class="flex flex-col items-end gap-1">
                 <span class="badge ${isAdminRole ? 'badge-warning' : isTreasurerRole ? 'badge-info' : 'badge-neutral'}" style="font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.45rem;">
                   <i class="fas ${isAdminRole ? 'fa-crown' : isTreasurerRole ? 'fa-wallet' : 'fa-user'}"></i>
-                  ${isAdminRole ? 'Admin CLB' : isTreasurerRole ? 'Thủ quỹ' : 'Thành viên'}
+                  ${isAdminRole ? 'Admin CLB' : isTreasurerRole ? 'Thủ quỹ' : customRole ? Safe.html(customRole.name) : 'Thành viên'}
                 </span>
                 <span class="badge ${isFixed ? 'badge-paid' : 'badge-warning'}" style="font-size: 0.65rem; padding: 0.1rem 0.4rem;">
                   ${isFixed ? '🏸 Cố định' : '⚡ Vãng lai'}
@@ -3327,7 +3409,7 @@ const MembersModule = {
     const data = AppStorage.loadData();
     const m = (data.members || []).find(mem => mem.id === memberId);
     if (!m) return;
-    if (AppStorage.isAdmin()) {
+    if (AppStorage.can('members')) {
       this.openEditMemberModal(memberId);
     } else if (AppStorage.canViewMemberContact(m.id, m.phone)) {
       App.openUserProfileModal();
@@ -3392,7 +3474,7 @@ const MembersModule = {
   },
 
   openAddMemberModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng thêm thành viên trực tiếp chỉ dành cho Ban Quản trị CLB. Vui lòng đăng nhập!", "warning");
       App.showAuthModal('login');
       return;
@@ -3486,7 +3568,7 @@ const MembersModule = {
   },
 
   openEditMemberModal(memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng chỉnh sửa thành viên chỉ dành cho Ban Quản trị CLB!", "warning");
       return;
     }
@@ -3529,13 +3611,23 @@ const MembersModule = {
           </div>
           <div class="form-group">
             <label class="form-label font-bold">Vai trò</label>
-            <select id="edit-mem-role" class="form-select">
+            <select id="edit-mem-role" class="form-select" ${AppStorage.isSuperAdmin() ? '' : 'disabled title="Chỉ Quản trị viên được đổi vai trò hệ thống"'}>
               <option value="member" ${m.role === 'member' ? 'selected' : ''}>Thành viên</option>
               <option value="treasurer" ${m.role === 'treasurer' ? 'selected' : ''}>Thủ quỹ</option>
               <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Quản trị viên</option>
             </select>
           </div>
         </div>
+
+        ${AppStorage.isSuperAdmin() && user.username && AppStorage.getRoles().length ? `
+        <div class="form-group">
+          <label class="form-label font-bold"><i class="fas fa-user-shield text-primary"></i> Vai trò tùy chỉnh (quyền được giao)</label>
+          <select id="edit-mem-role-id" class="form-select">
+            <option value="">— Không có —</option>
+            ${AppStorage.getRoles().map(r => `<option value="${Safe.html(r.id)}" ${user.roleId === r.id ? 'selected' : ''}>${Safe.html(r.name)} (${(r.perms || []).map(p => Safe.html(AppStorage.PERM_LABELS[p] || p)).join(', ') || 'chưa có quyền'})</option>`).join('')}
+          </select>
+          <span class="text-secondary" style="font-size: 0.78rem;">Quản lý vai trò tại Cài đặt → Vai trò & quyền. Chỉ áp dụng cho thành viên thường.</span>
+        </div>` : ''}
 
         ${AppStorage.isSuperAdmin() && user.username ? `
         <label class="form-group" style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
@@ -3627,6 +3719,11 @@ const MembersModule = {
       user.role = m.role;
       user.type = m.type;
       if (avatar) user.avatar = avatar;
+      const roleSel = document.getElementById('edit-mem-role-id');
+      if (roleSel && AppStorage.isSuperAdmin()) {
+        if (roleSel.value && m.role === 'member') user.roleId = roleSel.value;
+        else delete user.roleId;
+      }
       const canSchedule = document.getElementById('edit-mem-can-schedule');
       if (canSchedule && AppStorage.isSuperAdmin()) {
         if (canSchedule.checked) user.canScheduleVotes = true;
@@ -3674,8 +3771,8 @@ const MembersModule = {
     if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
   },
 
-  deleteMember(memberId) {
-    if (!AppStorage.isAdmin()) {
+  async deleteMember(memberId) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng xóa thành viên chỉ dành cho Ban Quản trị CLB!", "warning");
       return;
     }
@@ -3684,7 +3781,7 @@ const MembersModule = {
     const member = (data.members || []).find(m => m.id === memberId);
     const memberName = member ? member.name : "thành viên";
 
-    if (!confirm(`Bạn có chắc chắn muốn xóa "${memberName}" khỏi danh sách CLB?\n(Lưu ý: Tài khoản và dữ liệu đóng quỹ tương ứng sẽ được dọn sạch)`)) {
+    if (!(await App.confirm(`Bạn có chắc chắn muốn xóa "${memberName}" khỏi danh sách CLB?\n(Lưu ý: Tài khoản và dữ liệu đóng quỹ tương ứng sẽ được dọn sạch)`))) {
       return;
     }
 
@@ -3724,7 +3821,7 @@ const MembersModule = {
   renderJoinCard() {
     const body = document.getElementById('join-card-body');
     if (!body) return;
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('members');
     const title = document.getElementById('join-card-title');
     const tabBtn = document.getElementById('subtab-btn-members-reg');
     if (tabBtn) tabBtn.innerHTML = isAdmin ? '<i class="fas fa-user-plus"></i> Thêm thành viên' : '<i class="fas fa-id-card"></i> Điều khoản & Đăng ký';
@@ -3788,7 +3885,7 @@ const MembersModule = {
   // Tạo thành viên (dùng chung cho form nhanh và hộp thoại "Thêm thành viên").
   // createAccount=false -> chỉ ghi tên (không có tài khoản/mật khẩu); true -> bắt buộc mật khẩu hợp lệ do Admin đặt.
   createMember({ name, phone, email = '', note = '', type = 'guest', role = 'member', avatar = '', createAccount = false, password = '' }) {
-    if (!AppStorage.isAdmin()) return { success: false, message: 'Chỉ Ban quản trị mới được thêm thành viên.' };
+    if (!AppStorage.can('members')) return { success: false, message: 'Chỉ Ban quản trị mới được thêm thành viên.' };
     name = String(name || '').trim();
     phone = String(phone || '').trim();
     const cleanPhone = phone.replace(/\D/g, '');
@@ -3900,7 +3997,7 @@ const MembersModule = {
   },
 
   copyMemberList() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng sao chép danh sách liên hệ thành viên chỉ dành cho Ban Quản trị!", "warning");
       return;
     }
@@ -3963,7 +4060,7 @@ const MembersModule = {
   },
 
   openEditBenefitsAndRulesModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('members')) {
       App.showToast("Chức năng chỉnh sửa Quyền lợi & Quy định CLB chỉ dành cho Ban Quản trị!", "warning");
       return;
     }
@@ -4135,8 +4232,8 @@ const ScheduleModule = {
   calendarScope: 'week', // trong chế độ 'calendar': 'week' (mặc định: tuần hiện tại) | 'month'
   weekStart: null, // Date (thứ Hai 00:00) của tuần đang xem
   currentFilter: 'upcoming',
-  calYear: 2026,
-  calMonth: 8, // 0-indexed: 8 = September (Tháng 9)
+  calYear: null, // null = năm/tháng hiện tại (đặt lúc init)
+  calMonth: null, // 0-indexed
   popoverEl: null,
   pollOptionCount: 2, // For dynamic option builder
 
@@ -4163,18 +4260,6 @@ const ScheduleModule = {
     }
 
     this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
-  },
-
-  createPopoverElement() {
-    if (document.getElementById('session-hover-popover')) {
-      this.popoverEl = document.getElementById('session-hover-popover');
-      return;
-    }
-    const pop = document.createElement('div');
-    pop.id = 'session-hover-popover';
-    pop.className = 'session-popover';
-    document.body.appendChild(pop);
-    this.popoverEl = pop;
   },
 
   // Safe Date-Time Parser to prevent Invalid Date exceptions
@@ -4254,46 +4339,6 @@ const ScheduleModule = {
     };
   },
 
-  // Update schedule high-level overview stats
-  updateScheduleOverviewStats(sessions = []) {
-    const monthCountEl = document.getElementById('sched-stat-month-count');
-    const monthLabelEl = document.getElementById('sched-stat-month-label');
-    const openVotesEl = document.getElementById('sched-stat-open-votes');
-    const nextTitleEl = document.getElementById('sched-stat-next-title');
-    const nextDescEl = document.getElementById('sched-stat-next-desc');
-
-    const year = this.calYear || new Date().getFullYear();
-    const month = this.calMonth !== undefined ? this.calMonth : new Date().getMonth();
-    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
-
-    if (monthLabelEl) monthLabelEl.innerText = `Tháng ${month + 1} / ${year}`;
-
-    // Filter sessions in current viewing month
-    const thisMonthSessions = sessions.filter(s => s.date && s.date.startsWith(monthPrefix));
-    if (monthCountEl) monthCountEl.innerText = `${thisMonthSessions.length} trận`;
-
-    // Filter open polls
-    const now = new Date();
-    const openSessions = sessions.filter(s => {
-      const lockInfo = this.getVoteLockStatus(s, 48);
-      return !lockInfo.isLocked && s.status === 'open';
-    });
-    if (openVotesEl) openVotesEl.innerText = `${openSessions.length} buổi`;
-
-    // Next upcoming session
-    const upcoming = sessions.filter(s => this.parseSessionDateTime(s.date, s.endTime || s.startTime) >= now)
-      .sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
-
-    if (upcoming.length > 0) {
-      const next = upcoming[0];
-      if (nextTitleEl) nextTitleEl.innerText = next.title;
-      if (nextDescEl) nextDescEl.innerText = `${next.date} lúc ${next.startTime} • ${next.courtName || 'Sân CLB'}`;
-    } else {
-      if (nextTitleEl) nextTitleEl.innerText = "Chưa có lịch sắp tới";
-      if (nextDescEl) nextDescEl.innerText = "Bấm 'Đặt lịch mới' để mở bình chọn";
-    }
-  },
-
   // Calculate statistics for Multi-Option Poll
   calculatePollStats(session) {
     const options = session.options || [];
@@ -4340,6 +4385,413 @@ const ScheduleModule = {
       optionStats,
       maxVotes
     };
+  },
+
+  openAddSessionForDate(dateStr) {
+    this.openAddSessionModal();
+    const dateInput = document.getElementById('session-date');
+    if (dateInput) dateInput.value = dateStr;
+    const optDate1 = document.getElementById('opt-date-1');
+    if (optDate1) optDate1.value = dateStr;
+    const optDate2 = document.getElementById('opt-date-2');
+    if (optDate2) optDate2.value = dateStr;
+  },
+
+  // ==========================================
+  // CARD / LIST VIEW RENDERER
+  // ==========================================
+  renderSessions(containerId, filter = 'upcoming') {
+    this.currentFilter = filter;
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const data = AppStorage.loadData();
+    const sessions = data.sessions || [];
+    const members = data.members || [];
+    const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
+    const currentUser = data.currentUser || AppStorage.getCurrentUser();
+    const currentMember = (data.members || []).find(m => 
+      (currentUser && currentUser.memberId && m.id === currentUser.memberId) ||
+      (currentUser && m.id === currentUser.id) ||
+      (currentUser && currentUser.username && m.username === currentUser.username)
+    );
+    const currentMemberId = currentMember ? currentMember.id : (currentUser ? (currentUser.memberId || currentUser.id) : '');
+    const currentUserId = currentUser ? currentUser.id : '';
+    const isAdmin = AppStorage.can('schedule');
+
+    const now = new Date();
+    const filtered = sessions.filter(s => {
+      const sessionDate = this.parseSessionDateTime(s.date, s.endTime || '23:59');
+      if (filter === 'upcoming') return sessionDate >= now;
+      if (filter === 'past') return sessionDate < now;
+      return true;
+    }).sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
+
+    if (filtered.length === 0) {
+      let emptyTitle = "Chưa có buổi đánh nào sắp tới";
+      let emptyDesc = "Hãy bấm nút <strong>\"Đặt lịch mới\"</strong> ở góc trên để tạo lịch đánh hoặc mở bình chọn chọn sân cho CLB!";
+      if (filter === 'past') {
+        emptyTitle = "Chưa có buổi đánh nào đã kết thúc";
+        emptyDesc = "Các buổi đánh sau khi kết thúc sẽ được lưu trữ và hiển thị đầy đủ tại đây.";
+      } else if (filter === 'all') {
+        emptyTitle = "Chưa có buổi đánh nào trên hệ thống";
+        emptyDesc = "Bấm <strong>\"Đặt lịch mới\"</strong> để thêm ca đánh đầu tiên cho CLB.";
+      }
+
+      if (containerId === 'schedule-upcoming-list') {
+        container.innerHTML = `
+          <div style="grid-column: 1 / -1; padding: 1.5rem 1rem; text-align: center; background: var(--bg-card-solid); border: 1px dashed var(--border-color); border-radius: var(--radius-lg);">
+            <div style="font-size: 1.6rem; margin-bottom: 0.35rem;">🏸</div>
+            <div style="font-weight: 600; color: var(--text-main); font-size: 0.95rem;">${emptyTitle}</div>
+            <p class="text-secondary" style="font-size: 0.84rem; margin-top: 0.25rem;">${emptyDesc}</p>
+          </div>
+        `;
+        return;
+      }
+      container.innerHTML = `
+        <div class="card text-center" style="padding: 3rem 1rem; grid-column: 1 / -1;">
+          <div style="font-size: 3rem; margin-bottom: 1rem;">🏸</div>
+          <h3>${emptyTitle}</h3>
+          <p class="text-secondary" style="margin-top: 0.5rem;">${emptyDesc}</p>
+          ${isAdmin ? `<button class="btn btn-primary" style="margin-top: 1rem;" onclick="ScheduleModule.openAddSessionModal()"><i class="fas fa-plus"></i> Thêm lịch đặt sân</button>` : ''}
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = filtered.map(session => {
+      const lockInfo = this.getVoteLockStatus(session, voteLockHours);
+      const isMultiPoll = session.voteMode === 'multi_option';
+      const isGuestType = session.sessionType === 'guest';
+
+      const dateObj = this.parseSessionDateTime(session.date, session.startTime);
+      const dayNames = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
+      const dayName = dayNames[dateObj.getDay()];
+      const dayNum = dateObj.getDate();
+      const monthNum = dateObj.getMonth() + 1;
+
+      // User's personal vote badge
+      const userVote = (session.votes || []).find(v => 
+        v.memberId === currentMemberId || 
+        v.memberId === currentUserId || 
+        (currentUser && currentUser.memberId && v.memberId === currentUser.memberId) ||
+        (currentUser && currentUser.username && v.memberId === currentUser.username)
+      );
+      let userVoteBadge = `<span class="badge badge-neutral"><i class="fas fa-question-circle"></i> Chưa bình chọn</span>`;
+      
+      if (isMultiPoll) {
+        const pollStats = this.calculatePollStats(session);
+        if (userVote) {
+          if (userVote.selectedOptions && userVote.selectedOptions.length > 0) {
+            userVoteBadge = `<span class="badge badge-paid"><i class="fas fa-check-circle"></i> Đã vote ${userVote.selectedOptions.length} phương án</span>`;
+          } else if (userVote.notGoing) {
+            userVoteBadge = `<span class="badge badge-unpaid"><i class="fas fa-times-circle"></i> Báo bận</span>`;
+          }
+        }
+
+        const pollOptionBarsHtml = pollStats.optionStats.map((st, idx) => `
+          <div style="margin-bottom: 0.5rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span class="font-semibold text-main">Phương án ${idx + 1}: ${Safe.html(st.option.courtName.split('(')[0])} (${Safe.html(st.option.startTime)}-${Safe.html(st.option.endTime)})</span>
+              <span class="font-bold text-primary font-mono">${st.voteCount} phiếu (${st.percent}%)</span>
+            </div>
+            <div class="poll-bar-track">
+              <div class="poll-bar-fill ${st.isLeader ? 'leader-bar' : ''}" style="width: ${st.percent}%;"></div>
+            </div>
+          </div>
+        `).join('');
+
+        return `
+          <div class="session-card is-featured" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" style="cursor: pointer;">
+            <div class="session-banner">
+              <div class="session-banner-top">
+                <div class="session-type-tags">
+                  <span class="badge badge-poll-mode">🗳️ Khảo sát sân & giờ</span>
+                  <span class="badge ${isGuestType ? 'badge-guest-type' : 'badge-fixed-type'}">
+                    ${isGuestType ? '⚡ Vãng lai' : '🏸 Cố định'}
+                  </span>
+                </div>
+                <div>
+                  ${lockInfo.isLocked ? 
+                    `<span class="badge badge-locked"><i class="fas fa-lock"></i> Đã đóng</span>` : 
+                    `<span class="badge badge-open"><i class="fas fa-vote-yea"></i> Đang vote</span>`}
+                </div>
+              </div>
+
+              <div class="session-date-box">
+                <div class="session-date-badge" style="background: var(--secondary);">
+                  <div class="day-name">${dayName}</div>
+                  <div class="day-num">${dayNum}/${monthNum}</div>
+                </div>
+                <div class="session-title-wrap">
+                  <h3>${Safe.html(session.title)}</h3>
+                  <div class="session-time-text" style="color: var(--secondary);">
+                    <i class="far fa-clock"></i> Khảo sát đa phương án (${session.options ? session.options.length : 2} lựa chọn)
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="session-body">
+              <div style="background: var(--bg-card); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 0.85rem;">
+                ${pollOptionBarsHtml}
+              </div>
+
+              <div class="vote-deadline-notice ${lockInfo.isLocked ? 'is-locked' : 'is-open'}">
+                <div>
+                  <i class="fas ${lockInfo.isLocked ? 'fa-lock' : 'fa-hourglass-half'}"></i>
+                  <span>${Safe.html(lockInfo.countdownText)}</span>
+                </div>
+                <span style="font-size: 0.75rem; opacity: 0.85;">Hạn: ${Safe.html(lockInfo.deadlineFormatted)}</span>
+              </div>
+
+              <div class="flex items-center justify-between" style="font-size: 0.85rem; padding-top: 0.25rem;">
+                <span class="text-secondary">Trạng thái của bạn:</span>
+                ${userVoteBadge}
+              </div>
+            </div>
+
+            <div class="session-footer" onclick="event.stopPropagation();">
+              <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})" title="Chia sẻ Zalo/Nhóm">
+                <i class="fas fa-share-alt"></i> Chia sẻ
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})">
+                <i class="fas fa-info-circle"></i> Chi tiết
+              </button>
+              <button class="btn btn-primary btn-sm" onclick="VotingModule.openVoteModal(${Safe.js(session.id)})" ${lockInfo.isLocked && !isAdmin ? 'disabled' : ''}>
+                <i class="fas fa-vote-yea"></i> ${lockInfo.isLocked ? (isAdmin ? 'Quản lý' : 'Đã khóa') : 'Bình chọn'}
+              </button>
+              ${isAdmin ? `
+                <button class="btn btn-outline-danger btn-sm" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi này">
+                  <i class="fas fa-trash-alt"></i> Xóa
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }
+
+      // STANDARD CARD
+      const goingVotes = (session.votes || []).filter(v => v.status === 'going');
+      const totalGoing = goingVotes.reduce((sum, v) => sum + 1 + (v.guests || 0), 0);
+      const maybeVotes = (session.votes || []).filter(v => v.status === 'maybe');
+
+      if (userVote) {
+        if (userVote.status === 'going') {
+          userVoteBadge = `<span class="badge badge-paid"><i class="fas fa-check-circle"></i> Đã đăng ký tham gia ${userVote.guests > 0 ? `(+${Safe.html(userVote.guests)} bạn)` : ''}</span>`;
+        } else if (userVote.status === 'not_going') {
+          userVoteBadge = `<span class="badge badge-unpaid"><i class="fas fa-times-circle"></i> Báo vắng buổi này</span>`;
+        } else if (userVote.status === 'maybe') {
+          userVoteBadge = `<span class="badge badge-pending"><i class="fas fa-clock"></i> Dự bị</span>`;
+        }
+      }
+
+      const attendeeAvatars = goingVotes.map(v => {
+        const mem = members.find(m => m.id === v.memberId || (m.username && m.username === v.memberId)) || 
+                    (data.users || []).find(u => u.id === v.memberId || u.memberId === v.memberId) || 
+                    { name: 'Thành viên', avatar: '' };
+        return `<img class="avatar avatar-sm" src="${Safe.url(mem.avatar, `https://ui-avatars.com/api/?name=${encodeURIComponent(mem.name)}&background=10b981&color=fff`)}" alt="${Safe.html(mem.name)}" title="${Safe.html(mem.name)} ${v.guests > 0 ? `(+${Safe.html(v.guests)} khách)` : ''}" onerror="this.src=${Safe.js('https://ui-avatars.com/api/?name=' + encodeURIComponent(mem.name) + '&background=10b981&color=fff')}">`;
+      }).slice(0, 7).join('');
+
+      const remainingSlots = session.maxPlayers - totalGoing;
+      let capacityBadge = '';
+      if (remainingSlots > 0) {
+        capacityBadge = `<span class="text-primary font-bold"><i class="fas fa-user-plus"></i> Còn ${remainingSlots} slot</span>`;
+      } else if (remainingSlots === 0) {
+        capacityBadge = `<span class="badge badge-info"><i class="fas fa-users"></i> Đủ người</span>`;
+      } else {
+        capacityBadge = `<span class="text-warning font-bold"><i class="fas fa-exclamation-triangle"></i> Đông (+${Math.abs(remainingSlots)})</span>`;
+      }
+
+      return `
+        <div class="session-card ${lockInfo.isLocked ? 'is-locked' : 'is-featured'}" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" style="cursor: pointer;">
+          <div class="session-banner">
+            <div class="session-banner-top">
+              <div class="session-type-tags">
+                <span class="badge ${isGuestType ? 'badge-guest-type' : 'badge-fixed-type'}">
+                  ${isGuestType ? '⚡ Vãng lai (theo ngày)' : '🏸 Cố định (trừ quỹ)'}
+                </span>
+              </div>
+              <div>
+                ${lockInfo.isLocked ? 
+                  `<span class="badge badge-locked"><i class="fas fa-lock"></i> Đã đóng</span>` : 
+                  `<span class="badge badge-open"><i class="fas fa-door-open"></i> Đang mở</span>`}
+              </div>
+            </div>
+
+            <div class="session-date-box">
+              <div class="session-date-badge">
+                <div class="day-name">${dayName}</div>
+                <div class="day-num">${dayNum}/${monthNum}</div>
+              </div>
+              <div class="session-title-wrap">
+                <h3>${Safe.html(session.title)}</h3>
+                <div class="session-time-text">
+                  <i class="far fa-clock"></i> ${Safe.html(session.startTime)} - ${Safe.html(session.endTime)} (${Safe.html(session.courtNumbers)})
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="session-body">
+            <div class="court-meta-list">
+              <div class="court-meta-item" style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 0.35rem;">
+                  <i class="fas fa-map-marker-alt text-primary"></i>
+                  <div><span>Sân:</span> <strong>${Safe.html(session.courtName)}</strong></div>
+                </div>
+                ${isAdmin ? `
+                  <button type="button" class="btn btn-ghost btn-icon btn-xs" onclick="event.stopPropagation(); ScheduleModule.openEditCourtLocationModal(${Safe.js(session.id)})" title="Admin: Chỉnh sửa thông tin sân & tiền sân" style="border: 1px solid var(--border-color); border-radius: var(--radius-sm); margin-left: 0.35rem; flex-shrink: 0;">
+                    <i class="fas fa-pencil-alt text-warning"></i>
+                  </button>
+                ` : ''}
+              </div>
+              <div class="court-meta-item">
+                <i class="fas fa-feather-alt"></i>
+                <div><span>Loại cầu:</span> <strong>${Safe.html(session.shuttleType || 'n/a')}</strong></div>
+              </div>
+              <div class="court-meta-item">
+                <i class="fas fa-money-bill-wave"></i>
+                <div><span>Tiền sân:</span> <strong>${session.courtPrice ? Number(session.courtPrice).toLocaleString('vi-VN') : '360.000'} đ</strong></div>
+              </div>
+              <div class="court-meta-item">
+                <i class="fas fa-users"></i>
+                <div><span>Tối đa:</span> <strong>${Safe.html(session.maxPlayers)} người</strong></div>
+              </div>
+            </div>
+
+            <div class="vote-deadline-notice ${lockInfo.isLocked ? 'is-locked' : 'is-open'}">
+              <div>
+                <i class="fas ${lockInfo.isLocked ? 'fa-lock' : 'fa-hourglass-half'}"></i>
+                <span>${Safe.html(lockInfo.countdownText)}</span>
+              </div>
+              <span style="font-size: 0.75rem; opacity: 0.85;">Hạn: ${Safe.html(lockInfo.deadlineFormatted)}</span>
+            </div>
+
+            <div class="roster-summary">
+              <div class="roster-header">
+                <div>
+                  <strong>${Safe.html(totalGoing)} người tham gia</strong> 
+                  <span class="text-secondary" style="font-size: 0.75rem;">(Đi: ${goingVotes.length} | Dự bị: ${maybeVotes.length})</span>
+                </div>
+                <div>${capacityBadge}</div>
+              </div>
+              <div class="avatar-stack">
+                ${attendeeAvatars}
+                ${goingVotes.length > 7 ? `<span class="avatar-more">+${goingVotes.length - 7}</span>` : ''}
+                ${goingVotes.length === 0 ? `<span class="text-muted" style="font-size: 0.8rem; font-style: italic;">Chưa có ai bình chọn tham gia</span>` : ''}
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between" style="font-size: 0.85rem; padding-top: 0.25rem;">
+              <span class="text-secondary">Trạng thái của bạn:</span>
+              ${userVoteBadge}
+            </div>
+          </div>
+
+          <div class="session-footer" onclick="event.stopPropagation();">
+            <button class="sf-btn sf-btn-secondary" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})" title="Chia se Zalo">
+              <i class="fas fa-share-alt"></i>
+            </button>
+            <button class="sf-btn sf-btn-secondary" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" title="Chi tiet & danh sach">
+              <i class="fas fa-info-circle"></i>
+            </button>
+            <button class="sf-btn sf-btn-primary sf-btn-main" onclick="VotingModule.openVoteModal(${Safe.js(session.id)})" ${lockInfo.isLocked && !isAdmin ? 'disabled' : ''}>
+              <i class="fas fa-vote-yea"></i>
+              <span>${lockInfo.isLocked ? (isAdmin ? 'Quản lý' : 'Đã khóa') : 'Bình chọn'}</span>
+            </button>
+            ${isAdmin ? `
+              <button class="sf-btn sf-btn-secondary" onclick="event.stopPropagation(); ScheduleModule.openChangeStatusModal(${Safe.js(session.id)})" title="${session.status === 'booked' ? 'Đã đặt sân' : session.status === 'completed' ? 'Đã diễn ra' : session.status === 'cancelled' ? 'Đã hủy' : 'Trạng thái'} — Nhấp để đổi">
+                ${session.status === 'booked' ? '<i class="fas fa-calendar-check" style="color:#06b6d4"></i>' : session.status === 'completed' ? '<i class="fas fa-flag-checkered" style="color:#10b981"></i>' : session.status === 'cancelled' ? '<i class="fas fa-times-circle" style="color:#ef4444"></i>' : '<i class="fas fa-tasks" style="color:#f59e0b"></i>'}
+              </button>
+              <button class="sf-btn sf-btn-danger" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi này">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            ` : ''}
+          </div>
+          </div>
+
+          </div>
+        </div>
+      `;
+    }).join('');
+  },
+
+};
+
+window.ScheduleModule = ScheduleModule;
+;
+
+// ===== js/modules/schedule-calendar.js =====
+// ScheduleModule - Lịch tuần / lịch tháng, bộ lọc, thống kê và bản xem nhanh khi rê chuột (tách từ schedule.js; mở rộng ScheduleModule nên `this` dùng như cũ)
+Object.assign(ScheduleModule, {
+  createPopoverElement() {
+    if (document.getElementById('session-hover-popover')) {
+      this.popoverEl = document.getElementById('session-hover-popover');
+      return;
+    }
+    const pop = document.createElement('div');
+    pop.id = 'session-hover-popover';
+    pop.className = 'session-popover';
+    document.body.appendChild(pop);
+    this.popoverEl = pop;
+  },
+
+  // Update schedule high-level overview stats
+  updateScheduleOverviewStats(sessions = []) {
+    const monthCountEl = document.getElementById('sched-stat-month-count');
+    const monthLabelEl = document.getElementById('sched-stat-month-label');
+    const openVotesEl = document.getElementById('sched-stat-open-votes');
+    const nextTitleEl = document.getElementById('sched-stat-next-title');
+    const nextDescEl = document.getElementById('sched-stat-next-desc');
+
+    const year = this.calYear || new Date().getFullYear();
+    const month = (this.calMonth === null || this.calMonth === undefined || isNaN(this.calMonth)) ? new Date().getMonth() : this.calMonth;
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+    // Chế độ lịch tuần: thống kê theo tuần đang xem; ngược lại theo tháng đang xem
+    let periodSessions;
+    if (this.currentViewMode === 'calendar' && this.calendarScope === 'week' && this.weekStart) {
+      const keys = new Set(Array.from({ length: 7 }, (_, i) => this.dateKeyOf(new Date(this.weekStart.getFullYear(), this.weekStart.getMonth(), this.weekStart.getDate() + i))));
+      periodSessions = sessions.filter(s => keys.has(s.date));
+      if (monthLabelEl) monthLabelEl.innerText = this.dateKeyOf(this.weekStart) === this.dateKeyOf(this.mondayOf(new Date())) ? 'Tuần này' : 'Tuần đang xem';
+    } else {
+      periodSessions = sessions.filter(s => s.date && s.date.startsWith(monthPrefix));
+      if (monthLabelEl) monthLabelEl.innerText = `Tháng ${month + 1} / ${year}`;
+    }
+    if (monthCountEl) monthCountEl.innerText = `${periodSessions.length} trận`;
+
+    // Số buổi ở các bộ lọc: Sắp diễn ra / Đã kết thúc / Tất cả
+    const nowTs = new Date();
+    const upcomingN = sessions.filter(s => this.parseSessionDateTime(s.date, s.endTime || '23:59') >= nowTs).length;
+    const counts = { upcoming: upcomingN, past: sessions.length - upcomingN, all: sessions.length };
+    const baseLabels = { upcoming: 'Sắp diễn ra', past: 'Đã kết thúc', all: 'Tất cả' };
+    document.querySelectorAll('#tab-schedule .filter-tab').forEach(btn => {
+      const f = btn.getAttribute('data-filter');
+      const label = btn.querySelector('span');
+      if (label && baseLabels[f]) label.textContent = `${baseLabels[f]} (${counts[f]})`;
+    });
+
+    // Filter open polls
+    const now = new Date();
+    const openSessions = sessions.filter(s => {
+      const lockInfo = this.getVoteLockStatus(s, 48);
+      return !lockInfo.isLocked && s.status === 'open';
+    });
+    if (openVotesEl) openVotesEl.innerText = `${openSessions.length} buổi`;
+
+    // Next upcoming session
+    const upcoming = sessions.filter(s => this.parseSessionDateTime(s.date, s.endTime || s.startTime) >= now)
+      .sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
+
+    if (upcoming.length > 0) {
+      const next = upcoming[0];
+      if (nextTitleEl) nextTitleEl.innerText = next.title;
+      if (nextDescEl) nextDescEl.innerText = `${next.date} lúc ${next.startTime} • ${next.courtName || 'Sân CLB'}`;
+    } else {
+      if (nextTitleEl) nextTitleEl.innerText = "Chưa có lịch sắp tới";
+      if (nextDescEl) nextDescEl.innerText = "Bấm 'Đặt lịch mới' để mở bình chọn";
+    }
   },
 
   setFilter(filter = 'upcoming', btnEl = null) {
@@ -4876,7 +5328,12 @@ const ScheduleModule = {
       this.popoverEl.classList.remove('visible');
     }
   },
+});
+;
 
+// ===== js/modules/schedule-details.js =====
+// ScheduleModule - Hộp thoại chi tiết buổi đánh, chốt phương án và chia sẻ (tách từ schedule.js; mở rộng ScheduleModule nên `this` dùng như cũ)
+Object.assign(ScheduleModule, {
   // ==========================================
   // COMPREHENSIVE SESSION DETAILS MODAL (CLICK)
   // ==========================================
@@ -4892,7 +5349,7 @@ const ScheduleModule = {
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = this.getVoteLockStatus(session, voteLockHours);
     const currentUser = data.currentUser || AppStorage.getCurrentUser();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
     const isMultiPoll = session.voteMode === 'multi_option';
     const isGuestType = session.sessionType === 'guest';
 
@@ -5406,7 +5863,7 @@ const ScheduleModule = {
   },
 
   // Admin finalizes a poll option
-  finalizePollOption(sessionId, optionId) {
+  async finalizePollOption(sessionId, optionId) {
     const data = AppStorage.loadData();
     const session = (data.sessions || []).find(s => s.id === sessionId);
     if (!session || !session.options) return;
@@ -5414,7 +5871,7 @@ const ScheduleModule = {
     const selectedOpt = session.options.find(o => o.id === optionId);
     if (!selectedOpt) return;
 
-    if (!confirm(`Bạn có chắc chắn muốn chốt lịch theo "${selectedOpt.courtName} (${selectedOpt.startTime} - ${selectedOpt.endTime})"?`)) return;
+    if (!(await App.confirm(`Bạn có chắc chắn muốn chốt lịch theo "${selectedOpt.courtName} (${selectedOpt.startTime} - ${selectedOpt.endTime})"?`))) return;
 
     session.courtName = selectedOpt.courtName;
     session.courtNumbers = selectedOpt.courtNumbers;
@@ -5461,337 +5918,425 @@ const ScheduleModule = {
     }
   },
 
-  openAddSessionForDate(dateStr) {
-    this.openAddSessionModal();
-    const dateInput = document.getElementById('session-date');
-    if (dateInput) dateInput.value = dateStr;
-    const optDate1 = document.getElementById('opt-date-1');
-    if (optDate1) optDate1.value = dateStr;
-    const optDate2 = document.getElementById('opt-date-2');
-    if (optDate2) optDate2.value = dateStr;
+  shareSession(sessionId) {
+    const data = AppStorage.loadData();
+    const session = (data.sessions || []).find(s => s.id === sessionId);
+    if (!session) return;
+
+    let shareText = '';
+    const isGuestType = session.sessionType === 'guest';
+
+    if (session.voteMode === 'multi_option') {
+      const pollStats = this.calculatePollStats(session);
+      const optionsText = (session.options || []).map((o, idx) => `👉 Phương án ${idx + 1}: ${o.courtName} (${o.date} lúc ${o.startTime}-${o.endTime})`).join('\n');
+
+      shareText = `🏸 [${data.clubInfo.shortName}] KHẢO SÁT CHỌN SÂN & KHUNG GIỜ
+📌 Buổi: ${session.title} (${isGuestType ? 'Giao lưu vãng lai' : 'Lịch cố định'})
+${optionsText}
+🎯 Đã có ${pollStats.totalVoters} anh em tham gia bình chọn
+⚠️ HẠN CHÓT: Hệ thống tự động khóa bình chọn trước ngày đánh 2 ngày để chốt sân!
+👉 Mời mọi người vào ứng dụng vote phương án phù hợp nhé!`;
+    } else {
+      const going = (session.votes || []).filter(v => v.status === 'going');
+      const totalGoing = going.reduce((sum, v) => sum + 1 + (v.guests || 0), 0);
+
+      shareText = `🏸 [${data.clubInfo.shortName}] THÔNG BÁO LỊCH ĐÁNH CẦU LÔNG
+📌 Loại hình: ${isGuestType ? 'Giao lưu vãng lai theo ngày' : 'Lịch cố định (trừ quỹ tháng)'}
+📅 Ngày: ${session.date} (${session.startTime} - ${session.endTime})
+📍 Địa điểm: ${session.courtName} (${session.courtNumbers})
+🎯 Sức chứa: Đã có ${totalGoing}/${session.maxPlayers} người đăng ký
+🏸 Loại cầu: ${session.shuttleType || 'n/a'}
+⚠️ LƯU Ý: Bình chọn sẽ TỰ ĐỘNG KHÓA trước giờ đánh 2 ngày để chốt sân!
+👉 Mọi người vui lòng vào ứng dụng để bình chọn đi/nghỉ nhé!`;
+    }
+
+    navigator.clipboard.writeText(shareText).then(() => {
+      App.showToast("Đã sao chép nội dung thông báo lịch vào Clipboard! Bạn có thể dán vào Zalo / Messenger ngay.", "success");
+    }).catch(() => {
+      App.showText("Sao chép nội dung bên dưới để gửi nhóm:", shareText);
+    });
+  },
+});
+;
+
+// ===== js/modules/schedule-courts.js =====
+// ScheduleModule - Địa chỉ sân & bản đồ (tách từ schedule.js; mở rộng ScheduleModule nên `this` dùng như cũ)
+Object.assign(ScheduleModule, {
+  // Fill default club court address into a target input element
+  fillDefaultClubCourtAddress(targetInputId = 'session-court-address') {
+    const data = AppStorage.loadData();
+    const defaultAddr = (data.clubInfo && data.clubInfo.address) || "50/1 Tân Sơn, Phường 15, Tân Bình, TP. Hồ Chí Minh";
+    const input = document.getElementById(targetInputId);
+    if (input) {
+      input.value = defaultAddr;
+      App.showToast("📍 Đã điền địa chỉ sân nhà của CLB!", "info");
+    }
+  },
+
+  // Quick test Google Maps location search in a new tab
+  testMapLocation(addrInputId, nameInputId) {
+    const addrInput = document.getElementById(addrInputId);
+    const nameInput = document.getElementById(nameInputId);
+    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || "Sân cầu lông";
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+    window.open(url, '_blank');
+  },
+
+  // Copy court address to clipboard with user toast feedback
+  copyAddress(address) {
+    if (!address) {
+      App.showToast("Không có thông tin địa chỉ để sao chép!", "warning");
+      return;
+    }
+    navigator.clipboard.writeText(address).then(() => {
+      App.showToast("📍 Đã sao chép địa chỉ sân vào bộ nhớ tạm!", "success");
+    }).catch(() => {
+      App.showText("Sao chép địa chỉ sân:", address);
+    });
+  },
+
+  // Open Court Map Modal Popup
+  openCourtMapModal(courtName, courtAddress, mapUrl) {
+    const data = AppStorage.loadData();
+    const resolvedAddress = courtAddress || (data.clubInfo ? data.clubInfo.address : '') || courtName || 'Sân cầu lông';
+    const directMapsUrl = mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(resolvedAddress)}`;
+
+    const modalBody = `
+      <div style="margin-bottom: 1rem;">
+        <div class="font-bold text-main" style="font-size: 1.1rem; margin-bottom: 0.25rem;">
+          <i class="fas fa-map-marker-alt text-primary"></i> ${Safe.html(courtName)}
+        </div>
+        <div class="text-secondary" style="font-size: 0.88rem; display: flex; align-items: flex-start; gap: 0.4rem;">
+          <i class="fas fa-location-arrow text-primary" style="margin-top: 0.2rem; font-size: 0.75rem;"></i>
+          <span>${Safe.html(resolvedAddress)}</span>
+        </div>
+      </div>
+
+      <div class="court-map-embed-wrapper" style="height: 320px; margin-bottom: 1.25rem;">
+        <iframe 
+          width="100%" 
+          height="100%" 
+          style="border:0;" 
+          loading="lazy" 
+          allowfullscreen 
+          referrerpolicy="no-referrer-when-downgrade"
+          src="https://maps.google.com/maps?q=${encodeURIComponent(resolvedAddress)}&t=&z=15&ie=UTF8&iwloc=&output=embed">
+        </iframe>
+      </div>
+
+      <div class="modal-footer" style="padding: 0; display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" class="btn btn-outline-primary btn-sm" onclick="ScheduleModule.copyAddress(${Safe.js(resolvedAddress)})">
+          <i class="far fa-copy"></i> Sao chép địa chỉ
+        </button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+          <a href="${Safe.url(directMapsUrl)}" target="_blank" class="btn btn-primary">
+            <i class="fas fa-directions"></i> Mở Google Maps
+          </a>
+        </div>
+      </div>
+    `;
+
+    App.openModal("🗺️ Vị trí sân trên Google Maps", modalBody, true);
   },
 
   // ==========================================
-  // CARD / LIST VIEW RENDERER
   // ==========================================
-  renderSessions(containerId, filter = 'upcoming') {
-    this.currentFilter = filter;
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const data = AppStorage.loadData();
-    const sessions = data.sessions || [];
-    const members = data.members || [];
-    const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
-    const currentUser = data.currentUser || AppStorage.getCurrentUser();
-    const currentMember = (data.members || []).find(m => 
-      (currentUser && currentUser.memberId && m.id === currentUser.memberId) ||
-      (currentUser && m.id === currentUser.id) ||
-      (currentUser && currentUser.username && m.username === currentUser.username)
-    );
-    const currentMemberId = currentMember ? currentMember.id : (currentUser ? (currentUser.memberId || currentUser.id) : '');
-    const currentUserId = currentUser ? currentUser.id : '';
-    const isAdmin = AppStorage.isAdmin();
-
-    const now = new Date();
-    const filtered = sessions.filter(s => {
-      const sessionDate = this.parseSessionDateTime(s.date, s.endTime || '23:59');
-      if (filter === 'upcoming') return sessionDate >= now;
-      if (filter === 'past') return sessionDate < now;
-      return true;
-    }).sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
-
-    if (filtered.length === 0) {
-      let emptyTitle = "Chưa có buổi đánh nào sắp tới";
-      let emptyDesc = "Hãy bấm nút <strong>\"Đặt lịch mới\"</strong> ở góc trên để tạo lịch đánh hoặc mở bình chọn chọn sân cho CLB!";
-      if (filter === 'past') {
-        emptyTitle = "Chưa có buổi đánh nào đã kết thúc";
-        emptyDesc = "Các buổi đánh sau khi kết thúc sẽ được lưu trữ và hiển thị đầy đủ tại đây.";
-      } else if (filter === 'all') {
-        emptyTitle = "Chưa có buổi đánh nào trên hệ thống";
-        emptyDesc = "Bấm <strong>\"Đặt lịch mới\"</strong> để thêm ca đánh đầu tiên cho CLB.";
-      }
-
-      if (containerId === 'schedule-upcoming-list') {
-        container.innerHTML = `
-          <div style="grid-column: 1 / -1; padding: 1.5rem 1rem; text-align: center; background: var(--bg-card-solid); border: 1px dashed var(--border-color); border-radius: var(--radius-lg);">
-            <div style="font-size: 1.6rem; margin-bottom: 0.35rem;">🏸</div>
-            <div style="font-weight: 600; color: var(--text-main); font-size: 0.95rem;">${emptyTitle}</div>
-            <p class="text-secondary" style="font-size: 0.84rem; margin-top: 0.25rem;">${emptyDesc}</p>
-          </div>
-        `;
-        return;
-      }
-      container.innerHTML = `
-        <div class="card text-center" style="padding: 3rem 1rem; grid-column: 1 / -1;">
-          <div style="font-size: 3rem; margin-bottom: 1rem;">🏸</div>
-          <h3>${emptyTitle}</h3>
-          <p class="text-secondary" style="margin-top: 0.5rem;">${emptyDesc}</p>
-          ${isAdmin ? `<button class="btn btn-primary" style="margin-top: 1rem;" onclick="ScheduleModule.openAddSessionModal()"><i class="fas fa-plus"></i> Thêm lịch đặt sân</button>` : ''}
-        </div>
-      `;
+  // EDIT COURT LOCATION, PRICE & SHUTTLE (ENHANCED)
+  // ==========================================
+  openEditCourtLocationModal(targetId = 'club', optionId = null) {
+    if (!AppStorage.can('schedule')) {
+      App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa thông tin sân!", "warning");
+      App.showAuthModal('login');
       return;
     }
 
-    container.innerHTML = filtered.map(session => {
-      const lockInfo = this.getVoteLockStatus(session, voteLockHours);
-      const isMultiPoll = session.voteMode === 'multi_option';
-      const isGuestType = session.sessionType === 'guest';
+    const data = AppStorage.loadData();
+    let courtName = '';
+    let courtNumbers = '';
+    let courtPrice = 0;
+    let shuttleType = 'n/a';
+    let courtAddress = '';
+    let mapUrl = '';
+    let contextTitle = '';
 
-      const dateObj = this.parseSessionDateTime(session.date, session.startTime);
-      const dayNames = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
-      const dayName = dayNames[dateObj.getDay()];
-      const dayNum = dateObj.getDate();
-      const monthNum = dateObj.getMonth() + 1;
-
-      // User's personal vote badge
-      const userVote = (session.votes || []).find(v => 
-        v.memberId === currentMemberId || 
-        v.memberId === currentUserId || 
-        (currentUser && currentUser.memberId && v.memberId === currentUser.memberId) ||
-        (currentUser && currentUser.username && v.memberId === currentUser.username)
-      );
-      let userVoteBadge = `<span class="badge badge-neutral"><i class="fas fa-question-circle"></i> Chưa bình chọn</span>`;
-      
-      if (isMultiPoll) {
-        const pollStats = this.calculatePollStats(session);
-        if (userVote) {
-          if (userVote.selectedOptions && userVote.selectedOptions.length > 0) {
-            userVoteBadge = `<span class="badge badge-paid"><i class="fas fa-check-circle"></i> Đã vote ${userVote.selectedOptions.length} phương án</span>`;
-          } else if (userVote.notGoing) {
-            userVoteBadge = `<span class="badge badge-unpaid"><i class="fas fa-times-circle"></i> Báo bận</span>`;
-          }
-        }
-
-        const pollOptionBarsHtml = pollStats.optionStats.map((st, idx) => `
-          <div style="margin-bottom: 0.5rem;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
-              <span class="font-semibold text-main">Phương án ${idx + 1}: ${Safe.html(st.option.courtName.split('(')[0])} (${Safe.html(st.option.startTime)}-${Safe.html(st.option.endTime)})</span>
-              <span class="font-bold text-primary font-mono">${st.voteCount} phiếu (${st.percent}%)</span>
-            </div>
-            <div class="poll-bar-track">
-              <div class="poll-bar-fill ${st.isLeader ? 'leader-bar' : ''}" style="width: ${st.percent}%;"></div>
-            </div>
-          </div>
-        `).join('');
-
-        return `
-          <div class="session-card is-featured" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" style="cursor: pointer;">
-            <div class="session-banner">
-              <div class="session-banner-top">
-                <div class="session-type-tags">
-                  <span class="badge badge-poll-mode">🗳️ Khảo sát sân & giờ</span>
-                  <span class="badge ${isGuestType ? 'badge-guest-type' : 'badge-fixed-type'}">
-                    ${isGuestType ? '⚡ Vãng lai' : '🏸 Cố định'}
-                  </span>
-                </div>
-                <div>
-                  ${lockInfo.isLocked ? 
-                    `<span class="badge badge-locked"><i class="fas fa-lock"></i> Đã đóng</span>` : 
-                    `<span class="badge badge-open"><i class="fas fa-vote-yea"></i> Đang vote</span>`}
-                </div>
-              </div>
-
-              <div class="session-date-box">
-                <div class="session-date-badge" style="background: var(--secondary);">
-                  <div class="day-name">${dayName}</div>
-                  <div class="day-num">${dayNum}/${monthNum}</div>
-                </div>
-                <div class="session-title-wrap">
-                  <h3>${Safe.html(session.title)}</h3>
-                  <div class="session-time-text" style="color: var(--secondary);">
-                    <i class="far fa-clock"></i> Khảo sát đa phương án (${session.options ? session.options.length : 2} lựa chọn)
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="session-body">
-              <div style="background: var(--bg-card); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 0.85rem;">
-                ${pollOptionBarsHtml}
-              </div>
-
-              <div class="vote-deadline-notice ${lockInfo.isLocked ? 'is-locked' : 'is-open'}">
-                <div>
-                  <i class="fas ${lockInfo.isLocked ? 'fa-lock' : 'fa-hourglass-half'}"></i>
-                  <span>${Safe.html(lockInfo.countdownText)}</span>
-                </div>
-                <span style="font-size: 0.75rem; opacity: 0.85;">Hạn: ${Safe.html(lockInfo.deadlineFormatted)}</span>
-              </div>
-
-              <div class="flex items-center justify-between" style="font-size: 0.85rem; padding-top: 0.25rem;">
-                <span class="text-secondary">Trạng thái của bạn:</span>
-                ${userVoteBadge}
-              </div>
-            </div>
-
-            <div class="session-footer" onclick="event.stopPropagation();">
-              <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})" title="Chia sẻ Zalo/Nhóm">
-                <i class="fas fa-share-alt"></i> Chia sẻ
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})">
-                <i class="fas fa-info-circle"></i> Chi tiết
-              </button>
-              <button class="btn btn-primary btn-sm" onclick="VotingModule.openVoteModal(${Safe.js(session.id)})" ${lockInfo.isLocked && !isAdmin ? 'disabled' : ''}>
-                <i class="fas fa-vote-yea"></i> ${lockInfo.isLocked ? (isAdmin ? 'Quản lý' : 'Đã khóa') : 'Bình chọn'}
-              </button>
-              ${isAdmin ? `
-                <button class="btn btn-outline-danger btn-sm" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi này">
-                  <i class="fas fa-trash-alt"></i> Xóa
-                </button>
-              ` : ''}
-            </div>
-          </div>
-        `;
+    if (targetId === 'club') {
+      const info = data.clubInfo || {};
+      courtName = info.defaultCourt || '';
+      courtNumbers = info.courtNumbers || '';
+      courtAddress = info.address || '';
+      courtPrice = info.defaultCourtPrice || 0;
+      shuttleType = 'n/a';
+      mapUrl = info.mapUrl || '';
+      contextTitle = '🏸 Thông tin Sân nhà mặc định của CLB';
+    } else {
+      const session = (data.sessions || []).find(s => s.id === targetId);
+      if (!session) {
+        App.showToast("Không tìm thấy ca đặt sân tương ứng!", "error");
+        return;
       }
-
-      // STANDARD CARD
-      const goingVotes = (session.votes || []).filter(v => v.status === 'going');
-      const totalGoing = goingVotes.reduce((sum, v) => sum + 1 + (v.guests || 0), 0);
-      const maybeVotes = (session.votes || []).filter(v => v.status === 'maybe');
-
-      if (userVote) {
-        if (userVote.status === 'going') {
-          userVoteBadge = `<span class="badge badge-paid"><i class="fas fa-check-circle"></i> Đã đăng ký tham gia ${userVote.guests > 0 ? `(+${Safe.html(userVote.guests)} bạn)` : ''}</span>`;
-        } else if (userVote.status === 'not_going') {
-          userVoteBadge = `<span class="badge badge-unpaid"><i class="fas fa-times-circle"></i> Báo vắng buổi này</span>`;
-        } else if (userVote.status === 'maybe') {
-          userVoteBadge = `<span class="badge badge-pending"><i class="fas fa-clock"></i> Dự bị</span>`;
+      if (optionId && session.options) {
+        const opt = session.options.find(o => o.id === optionId);
+        if (!opt) {
+          App.showToast("Không tìm thấy phương án khảo sát tương ứng!", "error");
+          return;
         }
-      }
-
-      const attendeeAvatars = goingVotes.map(v => {
-        const mem = members.find(m => m.id === v.memberId || (m.username && m.username === v.memberId)) || 
-                    (data.users || []).find(u => u.id === v.memberId || u.memberId === v.memberId) || 
-                    { name: 'Thành viên', avatar: '' };
-        return `<img class="avatar avatar-sm" src="${Safe.url(mem.avatar, `https://ui-avatars.com/api/?name=${encodeURIComponent(mem.name)}&background=10b981&color=fff`)}" alt="${Safe.html(mem.name)}" title="${Safe.html(mem.name)} ${v.guests > 0 ? `(+${Safe.html(v.guests)} khách)` : ''}" onerror="this.src=${Safe.js('https://ui-avatars.com/api/?name=' + encodeURIComponent(mem.name) + '&background=10b981&color=fff')}">`;
-      }).slice(0, 7).join('');
-
-      const remainingSlots = session.maxPlayers - totalGoing;
-      let capacityBadge = '';
-      if (remainingSlots > 0) {
-        capacityBadge = `<span class="text-primary font-bold"><i class="fas fa-user-plus"></i> Còn ${remainingSlots} slot</span>`;
-      } else if (remainingSlots === 0) {
-        capacityBadge = `<span class="badge badge-info"><i class="fas fa-users"></i> Đủ người</span>`;
+        courtName = opt.courtName || '';
+        courtNumbers = opt.courtNumbers || '';
+        courtPrice = opt.price !== undefined ? opt.price : (session.courtPrice || 0);
+        shuttleType = opt.shuttleType || session.shuttleType || 'n/a';
+        courtAddress = opt.courtAddress || (data.clubInfo ? data.clubInfo.address : '');
+        mapUrl = opt.mapUrl || '';
+        contextTitle = `🏸 Thông tin sân: Phương án khảo sát (${session.title})`;
       } else {
-        capacityBadge = `<span class="text-warning font-bold"><i class="fas fa-exclamation-triangle"></i> Đông (+${Math.abs(remainingSlots)})</span>`;
+        courtName = session.courtName || session.court || '';
+        courtNumbers = session.courtNumbers || '';
+        courtPrice = session.courtPrice || 0;
+        shuttleType = session.shuttleType || 'n/a';
+        courtAddress = session.courtAddress || (data.clubInfo ? data.clubInfo.address : '');
+        mapUrl = session.mapUrl || '';
+        contextTitle = `🏸 Thông tin sân: ${session.title}`;
       }
+    }
 
-      return `
-        <div class="session-card ${lockInfo.isLocked ? 'is-locked' : 'is-featured'}" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" style="cursor: pointer;">
-          <div class="session-banner">
-            <div class="session-banner-top">
-              <div class="session-type-tags">
-                <span class="badge ${isGuestType ? 'badge-guest-type' : 'badge-fixed-type'}">
-                  ${isGuestType ? '⚡ Vãng lai (theo ngày)' : '🏸 Cố định (trừ quỹ)'}
-                </span>
-              </div>
-              <div>
-                ${lockInfo.isLocked ? 
-                  `<span class="badge badge-locked"><i class="fas fa-lock"></i> Đã đóng</span>` : 
-                  `<span class="badge badge-open"><i class="fas fa-door-open"></i> Đang mở</span>`}
-              </div>
-            </div>
+    const resolvedSearchQuery = courtAddress || courtName || 'San Cau Long';
 
-            <div class="session-date-box">
-              <div class="session-date-badge">
-                <div class="day-name">${dayName}</div>
-                <div class="day-num">${dayNum}/${monthNum}</div>
-              </div>
-              <div class="session-title-wrap">
-                <h3>${Safe.html(session.title)}</h3>
-                <div class="session-time-text">
-                  <i class="far fa-clock"></i> ${Safe.html(session.startTime)} - ${Safe.html(session.endTime)} (${Safe.html(session.courtNumbers)})
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="session-body">
-            <div class="court-meta-list">
-              <div class="court-meta-item" style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 0.35rem;">
-                  <i class="fas fa-map-marker-alt text-primary"></i>
-                  <div><span>Sân:</span> <strong>${Safe.html(session.courtName)}</strong></div>
-                </div>
-                ${isAdmin ? `
-                  <button type="button" class="btn btn-ghost btn-icon btn-xs" onclick="event.stopPropagation(); ScheduleModule.openEditCourtLocationModal(${Safe.js(session.id)})" title="Admin: Chỉnh sửa thông tin sân & tiền sân" style="border: 1px solid var(--border-color); border-radius: var(--radius-sm); margin-left: 0.35rem; flex-shrink: 0;">
-                    <i class="fas fa-pencil-alt text-warning"></i>
-                  </button>
-                ` : ''}
-              </div>
-              <div class="court-meta-item">
-                <i class="fas fa-feather-alt"></i>
-                <div><span>Loại cầu:</span> <strong>${Safe.html(session.shuttleType || 'n/a')}</strong></div>
-              </div>
-              <div class="court-meta-item">
-                <i class="fas fa-money-bill-wave"></i>
-                <div><span>Tiền sân:</span> <strong>${session.courtPrice ? Number(session.courtPrice).toLocaleString('vi-VN') : '360.000'} đ</strong></div>
-              </div>
-              <div class="court-meta-item">
-                <i class="fas fa-users"></i>
-                <div><span>Tối đa:</span> <strong>${Safe.html(session.maxPlayers)} người</strong></div>
-              </div>
-            </div>
-
-            <div class="vote-deadline-notice ${lockInfo.isLocked ? 'is-locked' : 'is-open'}">
-              <div>
-                <i class="fas ${lockInfo.isLocked ? 'fa-lock' : 'fa-hourglass-half'}"></i>
-                <span>${Safe.html(lockInfo.countdownText)}</span>
-              </div>
-              <span style="font-size: 0.75rem; opacity: 0.85;">Hạn: ${Safe.html(lockInfo.deadlineFormatted)}</span>
-            </div>
-
-            <div class="roster-summary">
-              <div class="roster-header">
-                <div>
-                  <strong>${Safe.html(totalGoing)} người tham gia</strong> 
-                  <span class="text-secondary" style="font-size: 0.75rem;">(Đi: ${goingVotes.length} | Dự bị: ${maybeVotes.length})</span>
-                </div>
-                <div>${capacityBadge}</div>
-              </div>
-              <div class="avatar-stack">
-                ${attendeeAvatars}
-                ${goingVotes.length > 7 ? `<span class="avatar-more">+${goingVotes.length - 7}</span>` : ''}
-                ${goingVotes.length === 0 ? `<span class="text-muted" style="font-size: 0.8rem; font-style: italic;">Chưa có ai bình chọn tham gia</span>` : ''}
-              </div>
-            </div>
-
-            <div class="flex items-center justify-between" style="font-size: 0.85rem; padding-top: 0.25rem;">
-              <span class="text-secondary">Trạng thái của bạn:</span>
-              ${userVoteBadge}
-            </div>
-          </div>
-
-
-          <div class="session-footer" onclick="event.stopPropagation();">
-            <button class="sf-btn sf-btn-secondary" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})" title="Chia se Zalo">
-              <i class="fas fa-share-alt"></i>
-            </button>
-            <button class="sf-btn sf-btn-secondary" onclick="ScheduleModule.openSessionDetailsModal(${Safe.js(session.id)})" title="Chi tiet & danh sach">
-              <i class="fas fa-info-circle"></i>
-            </button>
-            <button class="sf-btn sf-btn-primary sf-btn-main" onclick="VotingModule.openVoteModal(${Safe.js(session.id)})" ${lockInfo.isLocked && !isAdmin ? 'disabled' : ''}>
-              <i class="fas fa-vote-yea"></i>
-              <span>${lockInfo.isLocked ? (isAdmin ? 'Quản lý' : 'Đã khóa') : 'Bình chọn'}</span>
-            </button>
-            ${isAdmin ? `
-              <button class="sf-btn sf-btn-secondary" onclick="event.stopPropagation(); ScheduleModule.openChangeStatusModal(${Safe.js(session.id)})" title="${session.status === 'booked' ? 'Đã đặt sân' : session.status === 'completed' ? 'Đã diễn ra' : session.status === 'cancelled' ? 'Đã hủy' : 'Trạng thái'} — Nhấp để đổi">
-                ${session.status === 'booked' ? '<i class="fas fa-calendar-check" style="color:#06b6d4"></i>' : session.status === 'completed' ? '<i class="fas fa-flag-checkered" style="color:#10b981"></i>' : session.status === 'cancelled' ? '<i class="fas fa-times-circle" style="color:#ef4444"></i>' : '<i class="fas fa-tasks" style="color:#f59e0b"></i>'}
-              </button>
-              <button class="sf-btn sf-btn-danger" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi này">
-                <i class="fas fa-trash-alt"></i>
-              </button>
-            ` : ''}
-          </div>
-          </div>
-
+    const modalBody = `
+      <form onsubmit="ScheduleModule.saveCourtLocation(event, ${Safe.js(targetId)}, ${Safe.js(optionId || '')})">
+        <div style="background: rgba(16, 185, 129, 0.08); border-left: 3px solid var(--primary); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem;">
+          <div class="font-bold text-main" style="font-size: 0.95rem;">${Safe.html(contextTitle)}</div>
+          <div class="text-secondary" style="font-size: 0.8rem; margin-top: 0.15rem;">
+            Chỉnh sửa tên sân, số sân, tiền sân dự tính, loại cầu sử dụng (mặc định n/a), địa chỉ và bản đồ Google Maps. Thay đổi sẽ tự động đồng bộ lên Database.
           </div>
         </div>
-      `;
-    }).join('');
+
+        <div class="responsive-form-row">
+          <div class="form-group" style="flex: 1.4;">
+            <label class="form-label font-bold"><i class="fas fa-map-marker-alt text-primary"></i> Tên sân cầu lông *</label>
+            <input type="text" id="edit-loc-court-name" class="form-control" value="${Safe.html(courtName)}" required placeholder="VD: Sân cầu lông CLB">
+          </div>
+          <div class="form-group" style="flex: 1;">
+            <label class="form-label font-bold"><i class="fas fa-th-large text-primary"></i> Số sân / Ghi chú sân</label>
+            <input type="text" id="edit-loc-court-numbers" class="form-control" value="${Safe.html(courtNumbers)}" placeholder="VD: Sân 1 (1 sân)">
+          </div>
+        </div>
+
+        <div class="responsive-form-row">
+          <div class="form-group" style="flex: 1.2;">
+            <label class="form-label font-bold"><i class="fas fa-money-bill-wave text-primary"></i> Tiền sân dự tính (VNĐ)</label>
+            <input type="number" id="edit-loc-court-price" class="form-control" value="${Safe.html(courtPrice)}" placeholder="180000" step="10000">
+          </div>
+          <div class="form-group" style="flex: 1.2;">
+            <label class="form-label font-bold"><i class="fas fa-feather-alt text-primary"></i> Loại cầu sử dụng</label>
+            <input type="text" id="edit-loc-shuttle-type" class="form-control" value="${Safe.html(shuttleType)}" placeholder="n/a">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center justify-between" style="margin-bottom: 0.35rem;">
+            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-location-arrow text-primary"></i> Địa chỉ chi tiết sân *</label>
+            <div class="flex gap-2">
+              ${targetId !== 'club' ? `
+                <button type="button" class="btn btn-outline-primary btn-xs" onclick="ScheduleModule.fillClubAddressInModal()">
+                  <i class="fas fa-home"></i> Lấy địa chỉ CLB
+                </button>
+              ` : ''}
+              <button type="button" class="btn btn-outline-secondary btn-xs" onclick="ScheduleModule.updateLiveMapPreview()">
+                <i class="fas fa-sync"></i> Cập nhật bản đồ
+              </button>
+            </div>
+          </div>
+          <textarea id="edit-loc-address" class="form-control" rows="2" required placeholder="VD: 50/1 Tân Sơn, Phường 15, Quận Tân Bình, TP. Hồ Chí Minh" oninput="ScheduleModule.updateLiveMapPreview()">${Safe.html(courtAddress)}</textarea>
+          <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
+            Khung bản đồ bên dưới sẽ tự động tìm kiếm vị trí vệ tinh theo địa chỉ này.
+          </span>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center justify-between" style="margin-bottom: 0.35rem;">
+            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-link text-primary"></i> Link Google Maps (Tùy chọn)</label>
+            <div class="flex gap-2">
+              <button type="button" class="btn btn-outline-primary btn-xs" onclick="ScheduleModule.generateMapUrlInModal()">
+                <i class="fas fa-magic"></i> Tạo link tự động
+              </button>
+              <button type="button" class="btn btn-outline-secondary btn-xs" onclick="ScheduleModule.testMapUrlFromModal()">
+                <i class="fas fa-external-link-alt"></i> Mở thử Maps
+              </button>
+            </div>
+          </div>
+          <input type="url" id="edit-loc-map-url" class="form-control" value="${Safe.html(mapUrl)}" placeholder="https://maps.google.com/?q=...">
+          <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
+            Để trống hệ thống sẽ tự động tạo link mở ứng dụng Google Maps dẫn đường theo địa chỉ sân ở trên.
+          </span>
+        </div>
+
+        <!-- Live Interactive Map Preview -->
+        <div style="margin-top: 1rem;">
+          <div class="flex justify-between items-center" style="margin-bottom: 0.35rem;">
+            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-map text-primary"></i> Khung xem trước bản đồ Google Maps</label>
+            <span class="badge badge-neutral" style="font-size: 0.7rem;">Live Preview</span>
+          </div>
+          <div class="court-map-embed-wrapper" style="height: 180px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-color);">
+            <iframe 
+              id="edit-loc-map-iframe"
+              width="100%" 
+              height="100%" 
+              style="border:0;" 
+              loading="lazy" 
+              allowfullscreen 
+              referrerpolicy="no-referrer-when-downgrade"
+              src="https://maps.google.com/maps?q=${encodeURIComponent(resolvedSearchQuery)}&t=&z=15&ie=UTF8&iwloc=&output=embed">
+            </iframe>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="padding: 1.25rem 0 0 0; margin-top: 1.25rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Hủy bỏ</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save"></i> Lưu thông tin sân
+          </button>
+        </div>
+      </form>
+    `;
+
+    App.openModal("✏️ Chỉnh sửa thông tin sân & tiền sân dự tính", modalBody, true);
   },
 
+  updateLiveMapPreview() {
+    const addrInput = document.getElementById('edit-loc-address');
+    const nameInput = document.getElementById('edit-loc-court-name');
+    const iframe = document.getElementById('edit-loc-map-iframe');
+    if (!iframe) return;
+
+    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long';
+    iframe.src = `https://maps.google.com/maps?q=${encodeURIComponent(query)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+  },
+
+  fillClubAddressInModal() {
+    const data = AppStorage.loadData();
+    const clubAddr = (data.clubInfo && data.clubInfo.address) || "";
+    const clubCourt = (data.clubInfo && data.clubInfo.defaultCourt) || "";
+    const addrInput = document.getElementById('edit-loc-address');
+    const nameInput = document.getElementById('edit-loc-court-name');
+    if (addrInput) addrInput.value = clubAddr;
+    if (nameInput && !nameInput.value.trim()) nameInput.value = clubCourt;
+    this.updateLiveMapPreview();
+    App.showToast("📍 Đã lấy thông tin sân nhà của CLB!", "info");
+  },
+
+  generateMapUrlInModal() {
+    const addrInput = document.getElementById('edit-loc-address');
+    const nameInput = document.getElementById('edit-loc-court-name');
+    const mapUrlInput = document.getElementById('edit-loc-map-url');
+    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long';
+    const generatedUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+    if (mapUrlInput) {
+      mapUrlInput.value = generatedUrl;
+      App.showToast("🧭 Đã sinh link Google Maps chuẩn!", "success");
+    }
+  },
+
+  testMapUrlFromModal() {
+    const mapUrlInput = document.getElementById('edit-loc-map-url');
+    const addrInput = document.getElementById('edit-loc-address');
+    const nameInput = document.getElementById('edit-loc-court-name');
+    const url = (mapUrlInput && mapUrlInput.value.trim()) || 
+      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long')}`;
+    window.open(url, '_blank');
+  },
+
+  saveCourtLocation(e, targetId, optionId) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!AppStorage.can('schedule')) {
+      App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa thông tin sân!", "warning");
+      return;
+    }
+
+    const data = AppStorage.loadData();
+    const name = (document.getElementById('edit-loc-court-name')?.value || '').trim();
+    const numbers = (document.getElementById('edit-loc-court-numbers')?.value || '').trim();
+    const price = parseInt(document.getElementById('edit-loc-court-price')?.value) || 0;
+    const shuttle = (document.getElementById('edit-loc-shuttle-type')?.value || '').trim() || 'n/a';
+    const address = (document.getElementById('edit-loc-address')?.value || '').trim();
+    const mapUrlInput = (document.getElementById('edit-loc-map-url')?.value || '').trim();
+    const mapUrl = mapUrlInput || (address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '');
+
+    if (!name) {
+      App.showToast("Vui lòng nhập tên sân cầu lông!", "warning");
+      return;
+    }
+
+    if (targetId === 'club') {
+      if (!data.clubInfo) data.clubInfo = {};
+      data.clubInfo.defaultCourt = name;
+      data.clubInfo.address = address;
+      data.clubInfo.mapUrl = mapUrl;
+      data.clubInfo.defaultCourtPrice = price;
+      if (numbers) data.clubInfo.courtNumbers = numbers;
+
+      AppStorage.saveData(data, true);
+      App.closeModal();
+
+      // Cập nhật form cài đặt nếu đang mở
+      const setCourt = document.getElementById('set-court-default');
+      const setAddr = document.getElementById('set-court-address');
+      const setMap = document.getElementById('set-court-map-url');
+      if (setCourt) setCourt.value = name;
+      if (setAddr) setAddr.value = address;
+      if (setMap) setMap.value = mapUrl;
+
+      if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
+      App.showToast("🎉 Đã cập nhật và lưu thông tin Sân nhà CLB thành công!", "success");
+    } else {
+      const session = (data.sessions || []).find(s => s.id === targetId);
+      if (!session) {
+        App.showToast("Không tìm thấy ca đặt sân để lưu!", "error");
+        return;
+      }
+
+      if (optionId && session.options) {
+        const opt = session.options.find(o => o.id === optionId);
+        if (opt) {
+          opt.courtName = name;
+          opt.courtNumbers = numbers;
+          opt.price = price;
+          opt.shuttleType = shuttle;
+          opt.courtAddress = address;
+          opt.mapUrl = mapUrl;
+        }
+      } else {
+        session.courtName = name;
+        session.court = name;
+        session.courtNumbers = numbers;
+        session.courtPrice = price;
+        session.shuttleType = shuttle;
+        session.courtAddress = address;
+        session.mapUrl = mapUrl;
+      }
+
+      AppStorage.saveData(data, true);
+      App.closeModal();
+
+      // Làm mới lại giao diện
+      if (this.currentViewMode === 'calendar') {
+        this.renderMonthCalendar();
+      } else {
+        this.renderSessions('sessions-container', this.currentFilter || 'upcoming');
+      }
+      this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
+      if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
+
+      // Mở lại modal chi tiết của ca đánh vừa sửa để người dùng thấy ngay kết quả
+      this.openSessionDetailsModal(targetId);
+      App.showToast("🎉 Đã cập nhật thông tin sân, tiền sân và loại cầu thành công!", "success");
+    }
+  },
+});
+;
+
+// ===== js/modules/schedule-form.js =====
+// ScheduleModule - Biểu mẫu đặt lịch, đổi giờ, đổi trạng thái, xóa buổi (tách từ schedule.js; mở rộng ScheduleModule nên `this` dùng như cũ)
+Object.assign(ScheduleModule, {
   // ==========================================
   // ADD SESSION / CREATE POLL MODAL (SECURE ADMIN ACCESS)
   // ==========================================
@@ -5827,7 +6372,7 @@ const ScheduleModule = {
   },
 
   openAddSessionModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chức năng Tạo lịch đặt sân chỉ dành cho Quản trị viên. Vui lòng đăng nhập!", "warning");
       App.showAuthModal('login');
       return;
@@ -6150,381 +6695,11 @@ const ScheduleModule = {
     container.appendChild(row);
   },
 
-  // Fill default club court address into a target input element
-  fillDefaultClubCourtAddress(targetInputId = 'session-court-address') {
-    const data = AppStorage.loadData();
-    const defaultAddr = (data.clubInfo && data.clubInfo.address) || "50/1 Tân Sơn, Phường 15, Tân Bình, TP. Hồ Chí Minh";
-    const input = document.getElementById(targetInputId);
-    if (input) {
-      input.value = defaultAddr;
-      App.showToast("📍 Đã điền địa chỉ sân nhà của CLB!", "info");
-    }
-  },
-
-  // Quick test Google Maps location search in a new tab
-  testMapLocation(addrInputId, nameInputId) {
-    const addrInput = document.getElementById(addrInputId);
-    const nameInput = document.getElementById(nameInputId);
-    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || "Sân cầu lông";
-    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    window.open(url, '_blank');
-  },
-
-  // Copy court address to clipboard with user toast feedback
-  copyAddress(address) {
-    if (!address) {
-      App.showToast("Không có thông tin địa chỉ để sao chép!", "warning");
-      return;
-    }
-    navigator.clipboard.writeText(address).then(() => {
-      App.showToast("📍 Đã sao chép địa chỉ sân vào bộ nhớ tạm!", "success");
-    }).catch(() => {
-      prompt("Sao chép địa chỉ sân:", address);
-    });
-  },
-
-  // Open Court Map Modal Popup
-  openCourtMapModal(courtName, courtAddress, mapUrl) {
-    const data = AppStorage.loadData();
-    const resolvedAddress = courtAddress || (data.clubInfo ? data.clubInfo.address : '') || courtName || 'Sân cầu lông';
-    const directMapsUrl = mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(resolvedAddress)}`;
-
-    const modalBody = `
-      <div style="margin-bottom: 1rem;">
-        <div class="font-bold text-main" style="font-size: 1.1rem; margin-bottom: 0.25rem;">
-          <i class="fas fa-map-marker-alt text-primary"></i> ${Safe.html(courtName)}
-        </div>
-        <div class="text-secondary" style="font-size: 0.88rem; display: flex; align-items: flex-start; gap: 0.4rem;">
-          <i class="fas fa-location-arrow text-primary" style="margin-top: 0.2rem; font-size: 0.75rem;"></i>
-          <span>${Safe.html(resolvedAddress)}</span>
-        </div>
-      </div>
-
-      <div class="court-map-embed-wrapper" style="height: 320px; margin-bottom: 1.25rem;">
-        <iframe 
-          width="100%" 
-          height="100%" 
-          style="border:0;" 
-          loading="lazy" 
-          allowfullscreen 
-          referrerpolicy="no-referrer-when-downgrade"
-          src="https://maps.google.com/maps?q=${encodeURIComponent(resolvedAddress)}&t=&z=15&ie=UTF8&iwloc=&output=embed">
-        </iframe>
-      </div>
-
-      <div class="modal-footer" style="padding: 0; display: flex; justify-content: space-between; align-items: center;">
-        <button type="button" class="btn btn-outline-primary btn-sm" onclick="ScheduleModule.copyAddress(${Safe.js(resolvedAddress)})">
-          <i class="far fa-copy"></i> Sao chép địa chỉ
-        </button>
-        <div style="display: flex; gap: 0.5rem;">
-          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
-          <a href="${Safe.url(directMapsUrl)}" target="_blank" class="btn btn-primary">
-            <i class="fas fa-directions"></i> Mở Google Maps
-          </a>
-        </div>
-      </div>
-    `;
-
-    App.openModal("🗺️ Vị trí sân trên Google Maps", modalBody, true);
-  },
-
-  // ==========================================
-  // ==========================================
-  // EDIT COURT LOCATION, PRICE & SHUTTLE (ENHANCED)
-  // ==========================================
-  openEditCourtLocationModal(targetId = 'club', optionId = null) {
-    if (!AppStorage.isAdmin()) {
-      App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa thông tin sân!", "warning");
-      App.showAuthModal('login');
-      return;
-    }
-
-    const data = AppStorage.loadData();
-    let courtName = '';
-    let courtNumbers = '';
-    let courtPrice = 0;
-    let shuttleType = 'n/a';
-    let courtAddress = '';
-    let mapUrl = '';
-    let contextTitle = '';
-
-    if (targetId === 'club') {
-      const info = data.clubInfo || {};
-      courtName = info.defaultCourt || '';
-      courtNumbers = info.courtNumbers || '';
-      courtAddress = info.address || '';
-      courtPrice = info.defaultCourtPrice || 0;
-      shuttleType = 'n/a';
-      mapUrl = info.mapUrl || '';
-      contextTitle = '🏸 Thông tin Sân nhà mặc định của CLB';
-    } else {
-      const session = (data.sessions || []).find(s => s.id === targetId);
-      if (!session) {
-        App.showToast("Không tìm thấy ca đặt sân tương ứng!", "error");
-        return;
-      }
-      if (optionId && session.options) {
-        const opt = session.options.find(o => o.id === optionId);
-        if (!opt) {
-          App.showToast("Không tìm thấy phương án khảo sát tương ứng!", "error");
-          return;
-        }
-        courtName = opt.courtName || '';
-        courtNumbers = opt.courtNumbers || '';
-        courtPrice = opt.price !== undefined ? opt.price : (session.courtPrice || 0);
-        shuttleType = opt.shuttleType || session.shuttleType || 'n/a';
-        courtAddress = opt.courtAddress || (data.clubInfo ? data.clubInfo.address : '');
-        mapUrl = opt.mapUrl || '';
-        contextTitle = `🏸 Thông tin sân: Phương án khảo sát (${session.title})`;
-      } else {
-        courtName = session.courtName || session.court || '';
-        courtNumbers = session.courtNumbers || '';
-        courtPrice = session.courtPrice || 0;
-        shuttleType = session.shuttleType || 'n/a';
-        courtAddress = session.courtAddress || (data.clubInfo ? data.clubInfo.address : '');
-        mapUrl = session.mapUrl || '';
-        contextTitle = `🏸 Thông tin sân: ${session.title}`;
-      }
-    }
-
-    const resolvedSearchQuery = courtAddress || courtName || 'San Cau Long';
-
-    const modalBody = `
-      <form onsubmit="ScheduleModule.saveCourtLocation(event, ${Safe.js(targetId)}, ${Safe.js(optionId || '')})">
-        <div style="background: rgba(16, 185, 129, 0.08); border-left: 3px solid var(--primary); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem;">
-          <div class="font-bold text-main" style="font-size: 0.95rem;">${Safe.html(contextTitle)}</div>
-          <div class="text-secondary" style="font-size: 0.8rem; margin-top: 0.15rem;">
-            Chỉnh sửa tên sân, số sân, tiền sân dự tính, loại cầu sử dụng (mặc định n/a), địa chỉ và bản đồ Google Maps. Thay đổi sẽ tự động đồng bộ lên Database.
-          </div>
-        </div>
-
-        <div class="responsive-form-row">
-          <div class="form-group" style="flex: 1.4;">
-            <label class="form-label font-bold"><i class="fas fa-map-marker-alt text-primary"></i> Tên sân cầu lông *</label>
-            <input type="text" id="edit-loc-court-name" class="form-control" value="${Safe.html(courtName)}" required placeholder="VD: Sân cầu lông CLB">
-          </div>
-          <div class="form-group" style="flex: 1;">
-            <label class="form-label font-bold"><i class="fas fa-th-large text-primary"></i> Số sân / Ghi chú sân</label>
-            <input type="text" id="edit-loc-court-numbers" class="form-control" value="${Safe.html(courtNumbers)}" placeholder="VD: Sân 1 (1 sân)">
-          </div>
-        </div>
-
-        <div class="responsive-form-row">
-          <div class="form-group" style="flex: 1.2;">
-            <label class="form-label font-bold"><i class="fas fa-money-bill-wave text-primary"></i> Tiền sân dự tính (VNĐ)</label>
-            <input type="number" id="edit-loc-court-price" class="form-control" value="${Safe.html(courtPrice)}" placeholder="180000" step="10000">
-          </div>
-          <div class="form-group" style="flex: 1.2;">
-            <label class="form-label font-bold"><i class="fas fa-feather-alt text-primary"></i> Loại cầu sử dụng</label>
-            <input type="text" id="edit-loc-shuttle-type" class="form-control" value="${Safe.html(shuttleType)}" placeholder="n/a">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <div class="flex items-center justify-between" style="margin-bottom: 0.35rem;">
-            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-location-arrow text-primary"></i> Địa chỉ chi tiết sân *</label>
-            <div class="flex gap-2">
-              ${targetId !== 'club' ? `
-                <button type="button" class="btn btn-outline-primary btn-xs" onclick="ScheduleModule.fillClubAddressInModal()">
-                  <i class="fas fa-home"></i> Lấy địa chỉ CLB
-                </button>
-              ` : ''}
-              <button type="button" class="btn btn-outline-secondary btn-xs" onclick="ScheduleModule.updateLiveMapPreview()">
-                <i class="fas fa-sync"></i> Cập nhật bản đồ
-              </button>
-            </div>
-          </div>
-          <textarea id="edit-loc-address" class="form-control" rows="2" required placeholder="VD: 50/1 Tân Sơn, Phường 15, Quận Tân Bình, TP. Hồ Chí Minh" oninput="ScheduleModule.updateLiveMapPreview()">${Safe.html(courtAddress)}</textarea>
-          <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
-            Khung bản đồ bên dưới sẽ tự động tìm kiếm vị trí vệ tinh theo địa chỉ này.
-          </span>
-        </div>
-
-        <div class="form-group">
-          <div class="flex items-center justify-between" style="margin-bottom: 0.35rem;">
-            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-link text-primary"></i> Link Google Maps (Tùy chọn)</label>
-            <div class="flex gap-2">
-              <button type="button" class="btn btn-outline-primary btn-xs" onclick="ScheduleModule.generateMapUrlInModal()">
-                <i class="fas fa-magic"></i> Tạo link tự động
-              </button>
-              <button type="button" class="btn btn-outline-secondary btn-xs" onclick="ScheduleModule.testMapUrlFromModal()">
-                <i class="fas fa-external-link-alt"></i> Mở thử Maps
-              </button>
-            </div>
-          </div>
-          <input type="url" id="edit-loc-map-url" class="form-control" value="${Safe.html(mapUrl)}" placeholder="https://maps.google.com/?q=...">
-          <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
-            Để trống hệ thống sẽ tự động tạo link mở ứng dụng Google Maps dẫn đường theo địa chỉ sân ở trên.
-          </span>
-        </div>
-
-        <!-- Live Interactive Map Preview -->
-        <div style="margin-top: 1rem;">
-          <div class="flex justify-between items-center" style="margin-bottom: 0.35rem;">
-            <label class="form-label font-bold" style="margin-bottom: 0;"><i class="fas fa-map text-primary"></i> Khung xem trước bản đồ Google Maps</label>
-            <span class="badge badge-neutral" style="font-size: 0.7rem;">Live Preview</span>
-          </div>
-          <div class="court-map-embed-wrapper" style="height: 180px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-color);">
-            <iframe 
-              id="edit-loc-map-iframe"
-              width="100%" 
-              height="100%" 
-              style="border:0;" 
-              loading="lazy" 
-              allowfullscreen 
-              referrerpolicy="no-referrer-when-downgrade"
-              src="https://maps.google.com/maps?q=${encodeURIComponent(resolvedSearchQuery)}&t=&z=15&ie=UTF8&iwloc=&output=embed">
-            </iframe>
-          </div>
-        </div>
-
-        <div class="modal-footer" style="padding: 1.25rem 0 0 0; margin-top: 1.25rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.5rem;">
-          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Hủy bỏ</button>
-          <button type="submit" class="btn btn-primary">
-            <i class="fas fa-save"></i> Lưu thông tin sân
-          </button>
-        </div>
-      </form>
-    `;
-
-    App.openModal("✏️ Chỉnh sửa thông tin sân & tiền sân dự tính", modalBody, true);
-  },
-
-  updateLiveMapPreview() {
-    const addrInput = document.getElementById('edit-loc-address');
-    const nameInput = document.getElementById('edit-loc-court-name');
-    const iframe = document.getElementById('edit-loc-map-iframe');
-    if (!iframe) return;
-
-    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long';
-    iframe.src = `https://maps.google.com/maps?q=${encodeURIComponent(query)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
-  },
-
-  fillClubAddressInModal() {
-    const data = AppStorage.loadData();
-    const clubAddr = (data.clubInfo && data.clubInfo.address) || "";
-    const clubCourt = (data.clubInfo && data.clubInfo.defaultCourt) || "";
-    const addrInput = document.getElementById('edit-loc-address');
-    const nameInput = document.getElementById('edit-loc-court-name');
-    if (addrInput) addrInput.value = clubAddr;
-    if (nameInput && !nameInput.value.trim()) nameInput.value = clubCourt;
-    this.updateLiveMapPreview();
-    App.showToast("📍 Đã lấy thông tin sân nhà của CLB!", "info");
-  },
-
-  generateMapUrlInModal() {
-    const addrInput = document.getElementById('edit-loc-address');
-    const nameInput = document.getElementById('edit-loc-court-name');
-    const mapUrlInput = document.getElementById('edit-loc-map-url');
-    const query = (addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long';
-    const generatedUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    if (mapUrlInput) {
-      mapUrlInput.value = generatedUrl;
-      App.showToast("🧭 Đã sinh link Google Maps chuẩn!", "success");
-    }
-  },
-
-  testMapUrlFromModal() {
-    const mapUrlInput = document.getElementById('edit-loc-map-url');
-    const addrInput = document.getElementById('edit-loc-address');
-    const nameInput = document.getElementById('edit-loc-court-name');
-    const url = (mapUrlInput && mapUrlInput.value.trim()) || 
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((addrInput && addrInput.value.trim()) || (nameInput && nameInput.value.trim()) || 'San Cau Long')}`;
-    window.open(url, '_blank');
-  },
-
-  saveCourtLocation(e, targetId, optionId) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
-      App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa thông tin sân!", "warning");
-      return;
-    }
-
-    const data = AppStorage.loadData();
-    const name = (document.getElementById('edit-loc-court-name')?.value || '').trim();
-    const numbers = (document.getElementById('edit-loc-court-numbers')?.value || '').trim();
-    const price = parseInt(document.getElementById('edit-loc-court-price')?.value) || 0;
-    const shuttle = (document.getElementById('edit-loc-shuttle-type')?.value || '').trim() || 'n/a';
-    const address = (document.getElementById('edit-loc-address')?.value || '').trim();
-    const mapUrlInput = (document.getElementById('edit-loc-map-url')?.value || '').trim();
-    const mapUrl = mapUrlInput || (address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '');
-
-    if (!name) {
-      App.showToast("Vui lòng nhập tên sân cầu lông!", "warning");
-      return;
-    }
-
-    if (targetId === 'club') {
-      if (!data.clubInfo) data.clubInfo = {};
-      data.clubInfo.defaultCourt = name;
-      data.clubInfo.address = address;
-      data.clubInfo.mapUrl = mapUrl;
-      data.clubInfo.defaultCourtPrice = price;
-      if (numbers) data.clubInfo.courtNumbers = numbers;
-
-      AppStorage.saveData(data, true);
-      App.closeModal();
-
-      // Cập nhật form cài đặt nếu đang mở
-      const setCourt = document.getElementById('set-court-default');
-      const setAddr = document.getElementById('set-court-address');
-      const setMap = document.getElementById('set-court-map-url');
-      if (setCourt) setCourt.value = name;
-      if (setAddr) setAddr.value = address;
-      if (setMap) setMap.value = mapUrl;
-
-      if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
-      App.showToast("🎉 Đã cập nhật và lưu thông tin Sân nhà CLB thành công!", "success");
-    } else {
-      const session = (data.sessions || []).find(s => s.id === targetId);
-      if (!session) {
-        App.showToast("Không tìm thấy ca đặt sân để lưu!", "error");
-        return;
-      }
-
-      if (optionId && session.options) {
-        const opt = session.options.find(o => o.id === optionId);
-        if (opt) {
-          opt.courtName = name;
-          opt.courtNumbers = numbers;
-          opt.price = price;
-          opt.shuttleType = shuttle;
-          opt.courtAddress = address;
-          opt.mapUrl = mapUrl;
-        }
-      } else {
-        session.courtName = name;
-        session.court = name;
-        session.courtNumbers = numbers;
-        session.courtPrice = price;
-        session.shuttleType = shuttle;
-        session.courtAddress = address;
-        session.mapUrl = mapUrl;
-      }
-
-      AppStorage.saveData(data, true);
-      App.closeModal();
-
-      // Làm mới lại giao diện
-      if (this.currentViewMode === 'calendar') {
-        this.renderMonthCalendar();
-      } else {
-        this.renderSessions('sessions-container', this.currentFilter || 'upcoming');
-      }
-      this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
-      if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
-
-      // Mở lại modal chi tiết của ca đánh vừa sửa để người dùng thấy ngay kết quả
-      this.openSessionDetailsModal(targetId);
-      App.showToast("🎉 Đã cập nhật thông tin sân, tiền sân và loại cầu thành công!", "success");
-    }
-  },
-
   // ==========================================
   // EDIT SESSION DATE & TIME (ADMIN)
   // ==========================================
   openEditSessionTimeModal(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa giờ đánh!", "warning");
       return;
     }
@@ -6580,7 +6755,7 @@ const ScheduleModule = {
 
   saveSessionTime(e, sessionId) {
     if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên (Admin) mới có quyền chỉnh sửa giờ đánh!", "warning");
       return;
     }
@@ -6668,7 +6843,7 @@ const ScheduleModule = {
       const shuttleType = (document.getElementById("session-shuttle")?.value || "").trim() || 'n/a';
       const note = (document.getElementById("session-note")?.value || "").trim();
 
-      if (!AppStorage.isAdmin()) {
+      if (!AppStorage.can('schedule')) {
         App.showToast("Chỉ Ban Quản Trị / Admin mới có quyền tạo và lưu lịch đặt sân. Vui lòng đăng nhập!", "warning");
         App.showAuthModal('login');
         return;
@@ -6835,45 +7010,6 @@ const ScheduleModule = {
     }
   },
 
-  shareSession(sessionId) {
-    const data = AppStorage.loadData();
-    const session = (data.sessions || []).find(s => s.id === sessionId);
-    if (!session) return;
-
-    let shareText = '';
-    const isGuestType = session.sessionType === 'guest';
-
-    if (session.voteMode === 'multi_option') {
-      const pollStats = this.calculatePollStats(session);
-      const optionsText = (session.options || []).map((o, idx) => `👉 Phương án ${idx + 1}: ${o.courtName} (${o.date} lúc ${o.startTime}-${o.endTime})`).join('\n');
-
-      shareText = `🏸 [${data.clubInfo.shortName}] KHẢO SÁT CHỌN SÂN & KHUNG GIỜ
-📌 Buổi: ${session.title} (${isGuestType ? 'Giao lưu vãng lai' : 'Lịch cố định'})
-${optionsText}
-🎯 Đã có ${pollStats.totalVoters} anh em tham gia bình chọn
-⚠️ HẠN CHÓT: Hệ thống tự động khóa bình chọn trước ngày đánh 2 ngày để chốt sân!
-👉 Mời mọi người vào ứng dụng vote phương án phù hợp nhé!`;
-    } else {
-      const going = (session.votes || []).filter(v => v.status === 'going');
-      const totalGoing = going.reduce((sum, v) => sum + 1 + (v.guests || 0), 0);
-
-      shareText = `🏸 [${data.clubInfo.shortName}] THÔNG BÁO LỊCH ĐÁNH CẦU LÔNG
-📌 Loại hình: ${isGuestType ? 'Giao lưu vãng lai theo ngày' : 'Lịch cố định (trừ quỹ tháng)'}
-📅 Ngày: ${session.date} (${session.startTime} - ${session.endTime})
-📍 Địa điểm: ${session.courtName} (${session.courtNumbers})
-🎯 Sức chứa: Đã có ${totalGoing}/${session.maxPlayers} người đăng ký
-🏸 Loại cầu: ${session.shuttleType || 'n/a'}
-⚠️ LƯU Ý: Bình chọn sẽ TỰ ĐỘNG KHÓA trước giờ đánh 2 ngày để chốt sân!
-👉 Mọi người vui lòng vào ứng dụng để bình chọn đi/nghỉ nhé!`;
-    }
-
-    navigator.clipboard.writeText(shareText).then(() => {
-      App.showToast("Đã sao chép nội dung thông báo lịch vào Clipboard! Bạn có thể dán vào Zalo / Messenger ngay.", "success");
-    }).catch(() => {
-      prompt("Sao chép nội dung bên dưới để gửi nhóm:", shareText);
-    });
-  },
-
   // ==========================================
   // DELETE SESSION / POLL (ADMIN WITH SMART AUTH)
   // ==========================================
@@ -6899,7 +7035,7 @@ ${optionsText}
     }
 
     // Kiểm tra quyền Quản trị viên (Admin)
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên mới có quyền xóa buổi đặt sân!", "warning");
       return;
     }
@@ -6945,7 +7081,7 @@ ${optionsText}
   },
 
   deleteSession(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Ban Quản Trị / Admin mới có quyền xóa buổi bình chọn/đặt sân!", "warning");
       return;
     }
@@ -6992,7 +7128,7 @@ ${optionsText}
   // Vòng đời: open → booked → completed / cancelled
   // ==========================================
   openChangeStatusModal(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast('Chỉ Admin mới có quyền thay đổi trạng thái buổi đặt sân!', 'warning');
       return;
     }
@@ -7055,7 +7191,7 @@ ${optionsText}
   },
 
   changeSessionStatus(sessionId, newStatus) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast('Chỉ Admin mới có quyền thay đổi trạng thái!', 'warning');
       return;
     }
@@ -7120,10 +7256,8 @@ ${optionsText}
     if (window.App && typeof App.refreshDashboardStats === 'function') {
       App.refreshDashboardStats();
     }
-  }
-};
-
-window.ScheduleModule = ScheduleModule;
+  },
+});
 ;
 
 // ===== js/modules/voting.js =====
@@ -7230,7 +7364,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast("Buổi đánh này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch. Vui lòng liên hệ Ban Quản Trị!", "warning");
@@ -7261,7 +7395,7 @@ const VotingModule = {
       App.showAuthModal('login');
       return;
     }
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -7478,7 +7612,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast(lockInfo.notOpenYet ? `⏰ Chưa tới giờ mở bình chọn (${lockInfo.deadlineFormatted}).` : "Buổi khảo sát này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch!", "error");
@@ -7569,7 +7703,7 @@ const VotingModule = {
       App.showAuthModal('login');
       return;
     }
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
     const isGuestType = session.sessionType === 'guest';
 
     if (lockInfo.isLocked && !isAdmin) {
@@ -7751,7 +7885,7 @@ const VotingModule = {
 
     const voteLockHours = (data.clubInfo && data.clubInfo.voteLockHours) || 48;
     const lockInfo = ScheduleModule.getVoteLockStatus(session, voteLockHours);
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('schedule');
 
     if (lockInfo.isLocked && !isAdmin) {
       App.showToast(lockInfo.notOpenYet ? `⏰ Chưa tới giờ mở bình chọn (${lockInfo.deadlineFormatted}).` : "Buổi đánh này đã bị khóa bình chọn (quá hạn trước 2 ngày). Thành viên không thể đổi lịch!", "error");
@@ -7837,7 +7971,7 @@ const VotingModule = {
   },
 
   toggleAdminLock(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên mới có quyền khóa/mở bình chọn!", "warning");
       return;
     }
@@ -7858,7 +7992,7 @@ const VotingModule = {
   },
 
   openManualAddModal(sessionId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('schedule')) {
       App.showToast("Chỉ Quản trị viên mới có quyền thêm người khác!", "warning");
       return;
     }
@@ -8599,6 +8733,35 @@ const AutoScheduleModule = {
           <button class="btn btn-primary btn-sm" onclick="AutoScheduleModule.openEditor()"><i class="fas fa-plus"></i> Thêm lịch</button>
         </div>
         ${rows || '<div class="text-secondary" style="font-size: 0.82rem; margin-top: 0.5rem;">Chưa có lịch. Tạo lịch theo ngày cụ thể, theo thứ trong tuần hoặc theo ngày trong tháng; hệ thống tự tạo buổi và mở bình chọn đúng giờ.</div>'}
+        ${this.renderTimeline(data, list, now)}
+      </div>`;
+  },
+
+  // Dòng thời gian hợp nhất: các buổi sắp tới + giờ mở vote + NGUỒN của giờ đó (lịch lặp / quy tắc mặc định / hẹn tay / mở ngay)
+  renderTimeline(data, list, now) {
+    const upcoming = (data.sessions || []).filter((s) => s && s.date && s.status !== 'cancelled' && s.status !== 'completed' &&
+      ScheduleModule.parseSessionDateTime(s.date, s.endTime || '23:59').getTime() >= now)
+      .sort((a, b) => ScheduleModule.parseSessionDateTime(a.date, a.startTime) - ScheduleModule.parseSessionDateTime(b.date, b.startTime)).slice(0, 8);
+    if (!upcoming.length) return '';
+    const byId = new Map(list.map((s) => [s.id, s]));
+    const items = upcoming.map((s) => {
+      const st = VoteScheduler.getOpenState(s, now);
+      let source = 'Hẹn tay';
+      if (s.scheduleId && byId.has(s.scheduleId)) source = `Lịch lặp: ${byId.get(s.scheduleId).title || 'Giao lưu cầu lông'}`;
+      else if (s.scheduleId) source = 'Lịch lặp (đã xóa)';
+      else if (!st.scheduled) source = 'Mở ngay khi tạo';
+      const state = !st.scheduled ? '🟢 Đang mở' : st.isOpen ? `🟢 Đã mở lúc ${st.label}` : `⏳ Mở lúc ${st.label}`;
+      return `
+        <div class="flex items-center justify-between" style="gap: 0.5rem; padding: 0.4rem 0; border-top: 1px dashed var(--border-color); flex-wrap: wrap; font-size: 0.82rem;">
+          <span><b>${Safe.html(s.title)}</b> <span class="text-secondary">• ${Safe.html(s.date.split('-').reverse().join('/'))} ${Safe.html(s.startTime || '')}</span></span>
+          <span class="text-secondary">${state} • <i>${Safe.html(source)}</i></span>
+        </div>`;
+    }).join('');
+    return `
+      <div style="margin-top: 0.9rem;">
+        <div class="font-bold" style="font-size: 0.85rem;"><i class="fas fa-stream text-primary"></i> Dòng thời gian mở vote sắp tới</div>
+        <div class="text-secondary" style="font-size: 0.76rem; margin: 0.15rem 0 0.3rem;">Một nơi xem mọi buổi sắp tới và giờ mở vote, bất kể được tạo theo lịch lặp hay tạo tay. Muốn đổi một buổi riêng: mở buổi đó → "Hẹn giờ mở vote".</div>
+        ${items}
       </div>`;
   },
 
@@ -8856,13 +9019,157 @@ const AutoScheduleModule = {
     });
   },
 
-  remove(scheduleId) {
-    if (!confirm('Xóa lịch bình chọn tự động này? Các buổi đã tạo vẫn được giữ nguyên.')) return;
+  async remove(scheduleId) {
+    if (!(await App.confirm('Xóa lịch bình chọn tự động này? Các buổi đã tạo vẫn được giữ nguyên.'))) return;
     if (this._update(scheduleId, (s, list) => list.filter((x) => x.id !== scheduleId))) App.showToast('🗑️ Đã xóa lịch', 'success');
   }
 };
 
 window.AutoScheduleModule = AutoScheduleModule;
+;
+
+// ===== js/modules/roles.js =====
+// RolesModule - Vai trò tùy chỉnh & phân quyền (chỉ Admin)
+// - Vai trò lưu ở clubInfo.roles: [{ id, name, perms: ['schedule'|'members'|'finance'] }]
+// - Gán cho người dùng bằng users[].roleId (hộp thoại sửa thành viên). Máy chủ kiểm quyền thật; giao diện chỉ ẩn/hiện nút.
+// - Admin/Thủ quỹ hệ thống luôn có đủ quyền; vai trò tùy chỉnh không bao giờ cấp quyền Cài đặt, sao lưu hay đặt lại mật khẩu.
+const RolesModule = {
+  MAX_ROLES: 20,
+  NAME_MAX: 40,
+  DESCRIPTIONS: {
+    schedule: 'Tạo/sửa/xóa buổi đánh, đổi trạng thái, lịch bình chọn tự động',
+    members: 'Thêm/sửa/xóa thành viên thường (không cấp tài khoản, không đổi vai trò)',
+    finance: 'Thu quỹ, duyệt đóng quỹ, sổ thu chi, chia tiền sân'
+  },
+
+  roles() {
+    const list = (AppStorage.loadData().clubInfo || {}).roles;
+    return Array.isArray(list) ? list.filter((r) => r && r.id && r.name) : [];
+  },
+
+  holders(roleId, data) {
+    return (data.users || []).filter((u) => u.roleId === roleId);
+  },
+
+  renderPanel() {
+    const box = document.getElementById('roles-panel');
+    if (!box) return;
+    if (!AppStorage.isSuperAdmin()) { box.innerHTML = ''; return; }
+    const data = AppStorage.loadData();
+    const rows = this.roles().map((r) => {
+      const n = this.holders(r.id, data).length;
+      const perms = (r.perms || []).map((p) => `<span class="badge badge-info" style="font-size: 0.68rem;">${Safe.html(AppStorage.PERM_LABELS[p] || p)}</span>`).join(' ') || '<span class="text-secondary" style="font-size: 0.78rem;">Chưa có quyền nào</span>';
+      return `
+        <div class="flex items-center justify-between" style="gap: 0.75rem; padding: 0.6rem 0; border-top: 1px solid var(--border-color); flex-wrap: wrap;">
+          <div style="min-width: 0; flex: 1;">
+            <div class="font-bold">🎖️ ${Safe.html(r.name)} <span class="text-secondary" style="font-size: 0.78rem; font-weight: 400;">• ${n} người</span></div>
+            <div style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.25rem;">${perms}</div>
+          </div>
+          <div class="flex" style="gap: 0.4rem;">
+            <button class="btn btn-secondary btn-sm" onclick="RolesModule.openEditor(${Safe.js(r.id)})" title="Sửa"><i class="fas fa-pen"></i></button>
+            <button class="btn btn-outline-danger btn-sm" onclick="RolesModule.remove(${Safe.js(r.id)})" title="Xóa vai trò"><i class="fas fa-trash-alt"></i></button>
+          </div>
+        </div>`;
+    }).join('');
+    box.innerHTML = `
+      <div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1rem;">
+        <div class="flex items-center justify-between" style="gap: 0.75rem; flex-wrap: wrap;">
+          <div class="font-bold"><i class="fas fa-user-shield text-primary"></i> Vai trò & quyền (${this.roles().length})</div>
+          <button class="btn btn-primary btn-sm" onclick="RolesModule.openEditor()"><i class="fas fa-plus"></i> Thêm vai trò</button>
+        </div>
+        <div class="text-secondary" style="font-size: 0.8rem; margin-top: 0.35rem;">Tự đặt tên vai trò (VD: "Thư ký", "Kế toán") và chọn quyền được giao, rồi gán cho thành viên trong hộp thoại sửa thành viên. Các quyền Cài đặt, sao lưu, đặt lại mật khẩu luôn chỉ thuộc Admin.</div>
+        ${rows || '<div class="text-secondary" style="font-size: 0.82rem; margin-top: 0.5rem;">Chưa có vai trò tùy chỉnh.</div>'}
+        <div style="border-top: 1px solid var(--border-color); margin-top: 0.75rem; padding-top: 0.75rem;">
+          <button class="btn btn-secondary btn-sm" onclick="RolesModule.openAudit()"><i class="fas fa-clipboard-list"></i> Nhật ký thao tác</button>
+          <span class="text-secondary" style="font-size: 0.78rem; margin-left: 0.4rem;">Ai đã sửa gì (chỉ Ban quản trị và người được giao quyền; không lưu nội dung).</span>
+        </div>
+      </div>`;
+  },
+
+  async openAudit() {
+    if (!AppStorage.isSuperAdmin() || AppStorage.isLocalOnly()) { App.showToast('Nhật ký chỉ có khi kết nối máy chủ.', 'info'); return; }
+    App.openModal('📋 Nhật ký thao tác', '<div class="text-secondary">Đang tải…</div>', true);
+    const session = AppStorage._readSession();
+    const res = await AppStorage._authRequest({ action: 'auditList', token: session && session.token });
+    const body = document.getElementById('global-modal-body');
+    if (!body) return;
+    if (res.status !== 'ok') { body.innerHTML = `<div class="text-secondary">⚠️ ${Safe.html(res.message || 'Không tải được nhật ký.')}</div>`; return; }
+    const names = { sessions: 'Buổi đánh', members: 'Thành viên', users: 'Tài khoản', transactions: 'Sổ quỹ', monthlyContributions: 'Quỹ tháng', club: 'Cài đặt CLB' };
+    const ops = { put: 'Thêm/ghi đè', patch: 'Sửa', del: 'Xóa', reset: 'Đặt lại' };
+    body.innerHTML = (res.entries || []).length ? `
+      <div style="overflow-x: auto;"><table class="table" style="width: 100%; font-size: 0.8rem;">
+        <thead><tr><th>Thời gian</th><th>Người làm</th><th>Thao tác</th><th>Đối tượng</th><th>Trường</th></tr></thead>
+        <tbody>${res.entries.map((e) => `<tr><td>${Safe.html(e.at)}</td><td>${Safe.html(e.user)}<br><span class="text-secondary">${Safe.html(e.role)}</span></td><td>${Safe.html(ops[e.op] || e.op)}</td><td>${Safe.html(names[e.col] || e.col)}<br><span class="text-secondary">${Safe.html(e.key)}</span></td><td>${Safe.html(e.fields)}</td></tr>`).join('')}</tbody>
+      </table></div>` : '<div class="text-secondary">Chưa có thao tác nào được ghi.</div>';
+  },
+
+  openEditor(roleId = null) {
+    if (!AppStorage.isSuperAdmin()) return;
+    const role = roleId ? this.roles().find((r) => r.id === roleId) : null;
+    if (roleId && !role) return;
+    const has = (p) => !!(role && (role.perms || []).includes(p));
+    const body = `
+      <form onsubmit="RolesModule.save(event, ${Safe.js(roleId || '')})">
+        <div class="form-group">
+          <label class="form-label font-bold" for="role-name">Tên vai trò *</label>
+          <input type="text" id="role-name" class="form-control" maxlength="${this.NAME_MAX}" value="${Safe.html(role ? role.name : '')}" placeholder="VD: Thư ký, Kế toán, Phụ trách lịch" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label font-bold">Quyền được giao</label>
+          ${AppStorage.PERMS.map((p) => `
+            <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; cursor: pointer; margin-bottom: 0.5rem;">
+              <input type="checkbox" class="role-perm" value="${p}" ${has(p) ? 'checked' : ''} style="margin-top: 0.2rem;">
+              <span><b>${Safe.html(AppStorage.PERM_LABELS[p])}</b><br><span class="text-secondary" style="font-size: 0.78rem;">${Safe.html(this.DESCRIPTIONS[p])}</span></span>
+            </label>`).join('')}
+        </div>
+        <div class="flex gap-2" style="justify-content: flex-end;">
+          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Hủy</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Lưu vai trò</button>
+        </div>
+      </form>`;
+    App.openModal(role ? '🎖️ Sửa vai trò' : '🎖️ Thêm vai trò', body);
+  },
+
+  save(e, roleId) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!AppStorage.isSuperAdmin()) return;
+    const name = (document.getElementById('role-name')?.value || '').trim().slice(0, this.NAME_MAX);
+    if (!name) { App.showToast('Vui lòng nhập tên vai trò.', 'warning'); return; }
+    const perms = Array.from(document.querySelectorAll('.role-perm:checked')).map((el) => el.value).filter((p) => AppStorage.PERMS.includes(p));
+    const data = AppStorage.loadData();
+    data.clubInfo = data.clubInfo || {};
+    const list = this.roles();
+    const lower = name.toLowerCase();
+    if (list.some((r) => r.id !== roleId && r.name.trim().toLowerCase() === lower)) { App.showToast('Đã có vai trò trùng tên.', 'warning'); return; }
+    if (!roleId && list.length >= this.MAX_ROLES) { App.showToast(`Tối đa ${this.MAX_ROLES} vai trò.`, 'warning'); return; }
+    const id = roleId || `role_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+    const next = { id, name, perms };
+    const idx = list.findIndex((r) => r.id === id);
+    if (idx === -1) list.push(next); else list[idx] = next;
+    data.clubInfo.roles = list;
+    AppStorage.saveData(data);
+    App.closeModal();
+    App.showToast(`🎖️ Đã lưu vai trò "${name}".`, 'success');
+    this.renderPanel();
+    if (window.App && App.renderUserHeaderAndSidebar) App.renderUserHeaderAndSidebar();
+  },
+
+  async remove(roleId) {
+    if (!AppStorage.isSuperAdmin()) return;
+    const data = AppStorage.loadData();
+    const role = this.roles().find((r) => r.id === roleId);
+    if (!role) return;
+    const holders = this.holders(roleId, data);
+    if (!(await App.confirm(`Xóa vai trò "${role.name}"?` + (holders.length ? `\n${holders.length} người đang giữ vai trò này sẽ mất các quyền được giao.` : '')))) return;
+    holders.forEach((u) => { delete u.roleId; });
+    data.clubInfo.roles = this.roles().filter((r) => r.id !== roleId);
+    AppStorage.saveData(data);
+    App.showToast('🗑️ Đã xóa vai trò.', 'success');
+    this.renderPanel();
+  }
+};
+
+window.RolesModule = RolesModule;
 ;
 
 // ===== js/modules/google-auth.js =====
@@ -9003,7 +9310,7 @@ const GoogleAuth = {
   },
 
   async unlink() {
-    if (!confirm('Hủy liên kết Google? Sau đó bạn chỉ đăng nhập được bằng mật khẩu.')) return;
+    if (!(await App.confirm('Hủy liên kết Google? Sau đó bạn chỉ đăng nhập được bằng mật khẩu.'))) return;
     const res = await AppStorage.googleUnlink();
     App.showToast(res.message, res.success ? 'success' : 'error');
     if (res.success && App.openUserProfileModal) App.openUserProfileModal();
@@ -9377,6 +9684,7 @@ ${second.text}`;
 
   // Khóa nhận diện ảnh (đổi ảnh -> phải đối chiếu lại): độ dài + băm các ký tự lấy mẫu
   imgKey(dataUrl) {
+    if (AppStorage.isBillMarker(dataUrl)) return String(dataUrl).slice(AppStorage.BILL_MARK.length); // máy chủ đã tính sẵn cùng khóa
     const s = String(dataUrl || '');
     let h = 2166136261;
     for (let i = 0; i < s.length; i += 97) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
@@ -9399,7 +9707,7 @@ ${second.text}`;
   },
 
   async verifyDue(dueId, { force = false } = {}) {
-    if (!AppStorage.isAdmin()) return null;
+    if (!AppStorage.can('finance')) return null;
     let data = AppStorage.loadData();
     let due = (data.monthlyContributions || []).find((d) => d.id === dueId);
     if (!due || !due.billImage) return null;
@@ -9413,7 +9721,9 @@ ${second.text}`;
     }
     let res;
     try {
-      res = await this.check(due.billImage, expected);
+      const image = await AppStorage.getBill(due);
+      if (!image) throw new Error('không tải được ảnh biên lai từ máy chủ');
+      res = await this.check(image, expected);
     } catch (e) {
       console.warn('[PaymentVerify] Lỗi đọc ảnh:', e);
       this._setStatus(`Không đọc được ảnh: ${e.message}`);
@@ -9435,7 +9745,7 @@ ${second.text}`;
 
   // Chạy nền cho các phiếu chờ duyệt có ảnh (chỉ Admin/Thủ quỹ). Từng phiếu một để không treo máy.
   async autoRun() {
-    if (this._busy || !AppStorage.isAdmin()) return;
+    if (this._busy || !AppStorage.can('finance')) return;
     const list = this.targets(AppStorage.loadData());
     if (!list.length) return;
     this._busy = true;
@@ -9489,7 +9799,7 @@ ${second.text}`;
           ${v.txRef ? `<li>🔖 Mã giao dịch: <span class="font-mono">${Safe.html(v.txRef)}</span></li>` : ''}
           ${dup ? `<li>🚨 Mã giao dịch này cũng xuất hiện ở phiếu của <strong>${Safe.html(dupMember ? dupMember.name : 'thành viên khác')}</strong> (tháng ${Safe.html(dup.month)}). Có thể dùng lại một biên lai.</li>` : ''}
         </ul>
-        <img src="${Safe.url(due.billImage)}" alt="Biên lai" style="max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 8px; border: 1px solid var(--border-color);">
+        <img id="pv-detail-img" alt="Biên lai" style="max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 8px; border: 1px solid var(--border-color); min-height: 40px;">
         <p class="text-secondary" style="font-size: 0.78rem; margin: 0;">
           Đối chiếu tự động chỉ kiểm tra ảnh có <b>nhất quán</b> với khoản phải đóng. Ảnh có thể bị chỉnh sửa, nên nếu nghi ngờ hãy kiểm tra sao kê ngân hàng trước khi duyệt.
         </p>
@@ -9501,6 +9811,10 @@ ${second.text}`;
         </div>
       </div>`;
     App.openModal('🧾 Đối chiếu biên lai', body, true);
+    AppStorage.getBill(due).then((img) => {
+      const el = document.getElementById('pv-detail-img');
+      if (el && img) el.src = Safe.url(img);
+    });
   },
 
   async recheck(dueId) {
@@ -9515,7 +9829,7 @@ ${second.text}`;
   renderBar() {
     const box = document.getElementById('fund-verify-bar');
     if (!box) return;
-    if (!AppStorage.isAdmin()) { box.innerHTML = ''; return; }
+    if (!AppStorage.can('finance')) { box.innerHTML = ''; return; }
     const data = AppStorage.loadData();
     const month = AppStorage.currentMonth();
     const dues = (data.monthlyContributions || []).filter((d) => d.month === month);
@@ -9547,14 +9861,14 @@ ${second.text}`;
   },
 
   async approveMatched() {
-    if (!AppStorage.isAdmin()) return;
+    if (!AppStorage.can('finance')) return;
     const data = AppStorage.loadData();
     const month = AppStorage.currentMonth();
     const list = (data.monthlyContributions || []).filter((d) => d.month === month && d.status === 'pending' && d.billImage && !this.isStale(d) &&
       d.verify.state === 'match' && !this.duplicateOf(d, data.monthlyContributions));
     if (!list.length) return;
     const names = list.map((d) => ((data.members || []).find((m) => m.id === d.memberId) || {}).name || 'Thành viên');
-    if (!confirm(`Duyệt ${list.length} phiếu đã khớp?\n\n${names.join(', ')}\n\nĐối chiếu tự động chỉ kiểm tra ảnh nhất quán, không thay thế việc xem sao kê khi nghi ngờ.`)) return;
+    if (!(await App.confirm(`Duyệt ${list.length} phiếu đã khớp?\n\n${names.join(', ')}\n\nĐối chiếu tự động chỉ kiểm tra ảnh nhất quán, không thay thế việc xem sao kê khi nghi ngờ.`))) return;
     const user = AppStorage.getCurrentUser();
     const approver = (user && user.name) || 'Ban quản trị CLB';
     const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ');
@@ -9626,14 +9940,14 @@ const FundModule = {
     const data = AppStorage.loadData();
     let members = (data.members || []).filter(m => m.type === 'fixed');
     // Thành viên thường (không phải Admin/Thủ quỹ) chỉ xem tình trạng quỹ của chính mình
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       const me = AppStorage.getCurrentUser();
       members = members.filter(m => me && (m.id === me.memberId || (me.username && m.username === me.username)));
     }
     const dues = data.monthlyContributions || [];
     const defaultMonthlyFee = this.getClubFee(data);
     const currentUser = AppStorage.getCurrentUser();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
 
     const fixedMemberIds = new Set(members.map(m => m.id));
 
@@ -9766,7 +10080,7 @@ const FundModule = {
 
     const data = AppStorage.loadData();
     const currentUser = AppStorage.getCurrentUser();
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
     const defaultMonthlyFee = this.getClubFee(data);
 
     let filtered = monthDues;
@@ -9853,7 +10167,7 @@ const FundModule = {
           </td>
           <td>
             ${canViewDetails ? (due.billImage ? `
-              <button class="btn btn-secondary btn-sm" onclick="FundModule.previewBill(${Safe.js(due.billImage)}, ${Safe.js(member.name)})">
+              <button class="btn btn-secondary btn-sm" onclick="FundModule.previewBill(${Safe.js(due.id || '')}, ${Safe.js(member.name)})">
                 <i class="fas fa-image"></i> Xem biên lai
               </button>
             ` : `<span class="text-muted" style="font-size: 0.8rem;">Không có</span>`) : `<span class="text-muted font-mono">-</span>`}
@@ -9894,7 +10208,7 @@ const FundModule = {
 
   // Modal cho Admin cài đặt mức quỹ tháng chung của CLB
   openSetFeeModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền cài đặt số tiền quỹ tháng!", "warning");
       App.showAuthModal('login');
       return;
@@ -9939,7 +10253,7 @@ const FundModule = {
 
   async saveClubFee(e) {
     e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền cài đặt số tiền quỹ tháng!", "warning");
       return;
     }
@@ -9980,7 +10294,7 @@ const FundModule = {
 
   // Modal cho Admin chỉnh sửa riêng mức đóng của 1 thành viên
   openEditMemberDueModal(dueId, memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền sửa số tiền nộp của thành viên!", "warning");
       App.showAuthModal('login');
       return;
@@ -10035,7 +10349,7 @@ const FundModule = {
 
   async saveMemberDueAmount(e, dueId, memberId) {
     e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Quản trị viên mới có quyền sửa số tiền nộp của thành viên!", "warning");
       return;
     }
@@ -10098,7 +10412,7 @@ const FundModule = {
   },
 
   setFilter(filter) {
-    if (!AppStorage.isAdmin() && filter !== 'all') {
+    if (!AppStorage.can('finance') && filter !== 'all') {
       App.showToast("Bộ lọc theo trạng thái đóng quỹ chi tiết chỉ dành cho Quản trị viên!", "info");
       return;
     }
@@ -10341,7 +10655,7 @@ const FundModule = {
   },
 
   async approveDue(dueIdOrMemberId, isApproved) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền duyệt đóng quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -10408,7 +10722,7 @@ const FundModule = {
   },
 
   async markPaidCash(memberId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi nhận thu tiền mặt!", "warning");
       App.showAuthModal('login');
       return;
@@ -10483,7 +10797,7 @@ const FundModule = {
   },
 
   async resetDueStatus(memberId) {
-    if (!confirm("Bạn có chắc chắn muốn chuyển trạng thái thành viên này về Chưa đóng?\nGiao dịch thu quỹ tương ứng trong Sổ quỹ sẽ tự động được thu hồi/xóa.")) return;
+    if (!(await App.confirm("Bạn có chắc chắn muốn chuyển trạng thái thành viên này về Chưa đóng?\nGiao dịch thu quỹ tương ứng trong Sổ quỹ sẽ tự động được thu hồi/xóa."))) return;
     const data = AppStorage.loadData();
     let due = (data.monthlyContributions || []).find(d => d.memberId === memberId && d.month === this.currentMonth);
     if (due) {
@@ -10511,17 +10825,36 @@ const FundModule = {
     }
   },
 
-  previewBill(imageUrl, memberName) {
+  async previewBill(dueId, memberName) {
+    const due = ((AppStorage.loadData().monthlyContributions) || []).find(d => d.id === dueId);
     const modalBody = `
       <div class="text-center">
         <h4 style="margin-bottom: 1rem;">Biên lai chuyển khoản của <strong>${Safe.html(memberName)}</strong></h4>
-        <img src="${Safe.url(imageUrl)}" alt="Biên lai thanh toán" style="max-width: 100%; max-height: 480px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+        <img id="bill-preview-modal-img" alt="Biên lai thanh toán" style="max-width: 100%; max-height: 480px; min-height: 40px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
         <div style="margin-top: 1.25rem;">
           <button class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
         </div>
       </div>
     `;
     App.openModal("🧾 Ảnh biên lai chuyển khoản", modalBody);
+    const img = await AppStorage.getBill(due);
+    const el = document.getElementById('bill-preview-modal-img');
+    if (!el) return;
+    if (img) el.src = Safe.url(img);
+    else el.replaceWith(Object.assign(document.createElement('div'), { className: 'text-secondary', textContent: 'Không tải được ảnh biên lai.' }));
+  },
+
+  // Báo cáo quỹ: mỗi dòng là phiếu quỹ của một thành viên trong một tháng (lọc theo cột "Tháng" trong Excel/Sheets)
+  exportDuesCSV() {
+    if (!AppStorage.can('finance')) { App.showToast('Bạn không có quyền xuất báo cáo quỹ.', 'warning'); return; }
+    const data = AppStorage.loadData();
+    const names = new Map((data.members || []).map(m => [m.id, m.name]));
+    const statusText = { paid: 'Đã đóng', pending: 'Chờ duyệt', unpaid: 'Chưa đóng' };
+    const dues = (data.monthlyContributions || []).slice().sort((a, b) => String(b.month).localeCompare(String(a.month)) || String(names.get(a.memberId) || '').localeCompare(String(names.get(b.memberId) || '')));
+    Csv.download(`smash_pro_quy_thang_${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Tháng', 'Thành viên', 'Số tiền (VNĐ)', 'Trạng thái', 'Ngày đóng', 'Hình thức', 'Người duyệt'],
+      dues.map(d => [d.month, names.get(d.memberId) || d.memberId, d.amount || 0, statusText[d.status] || d.status, d.paidAt || '', d.method || '', d.approvedBy || '']));
+    App.showToast(`Đã xuất báo cáo quỹ (${dues.length} dòng).`, 'success');
   },
 
   sendReminderMessage() {
@@ -10564,7 +10897,7 @@ ${unpaidNames}
     navigator.clipboard.writeText(reminderMsg).then(() => {
       App.showToast("Đã sao chép nội dung nhắc nhở quỹ vào Clipboard! Bạn có thể dán vào nhóm Zalo/Telegram ngay.", "success");
     }).catch(() => {
-      prompt("Sao chép nội dung nhắc nhở:", reminderMsg);
+      App.showText("Sao chép nội dung nhắc nhở:", reminderMsg);
     });
   }
 };
@@ -10582,7 +10915,7 @@ const CashbookModule = {
   renderCashbook() {
     const data = AppStorage.loadData();
     const txs = data.transactions || [];
-    const isAdmin = AppStorage.isAdmin();
+    const isAdmin = AppStorage.can('finance');
     
     // Sắp xếp giao dịch mới nhất lên đầu
     const sortedTxs = [...txs].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -10713,7 +11046,7 @@ const CashbookModule = {
   },
 
   openAddTransactionModal() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -10781,7 +11114,7 @@ const CashbookModule = {
 
   async saveTransaction(e) {
     if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi chép thu chi vào sổ quỹ!", "warning");
       App.showAuthModal('login');
       return;
@@ -10857,7 +11190,7 @@ const CashbookModule = {
   // CHỈNH SỬA GIAO DỊCH THU CHI (ADMIN)
   // ==========================================
   openEditTransactionModal(txId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền chỉnh sửa giao dịch thu chi!", "warning");
       return;
     }
@@ -10936,7 +11269,7 @@ const CashbookModule = {
 
   async saveEditTransaction(e, txId) {
     if (e && e.preventDefault) e.preventDefault();
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền chỉnh sửa giao dịch thu chi!", "warning");
       return;
     }
@@ -11007,7 +11340,7 @@ const CashbookModule = {
   // XÓA GIAO DỊCH THU CHI (ADMIN)
   // ==========================================
   async deleteTransaction(txId) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền xóa giao dịch thu chi!", "warning");
       return;
     }
@@ -11020,7 +11353,7 @@ const CashbookModule = {
     }
 
     const amountFormatted = Number(t.amount).toLocaleString('vi-VN');
-    if (!confirm(`Bạn có chắc chắn muốn xóa giao dịch "${t.title}" (${t.type === 'income' ? '+' : '-'}${amountFormatted} đ) khỏi sổ quỹ không?\nThao tác này sẽ đồng bộ trực tiếp lên Cloud.`)) {
+    if (!(await App.confirm(`Bạn có chắc chắn muốn xóa giao dịch "${t.title}" (${t.type === 'income' ? '+' : '-'}${amountFormatted} đ) khỏi sổ quỹ không?\nThao tác này sẽ đồng bộ trực tiếp lên Cloud.`))) {
       return;
     }
 
@@ -11049,20 +11382,9 @@ const CashbookModule = {
   exportCSV() {
     const data = AppStorage.loadData();
     const txs = data.transactions || [];
-    let csv = "\uFEFFNgày,Loại,Danh mục,Tiêu đề,Số tiền (VNĐ),Người ghi,Ghi chú\n";
-
-    txs.forEach(t => {
-      const typeStr = t.type === 'income' ? 'Thu' : 'Chi';
-      csv += `"${t.date}","${typeStr}","${t.category}","${t.title}","${t.amount}","${t.createdBy || ''}","${t.note || ''}"\n`;
-    });
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `smash_pro_so_quy_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    Csv.download(`smash_pro_so_quy_${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Ngày', 'Loại', 'Danh mục', 'Tiêu đề', 'Số tiền (VNĐ)', 'Người ghi', 'Ghi chú'],
+      txs.map(t => [t.date, t.type === 'income' ? 'Thu' : 'Chi', t.category, t.title, t.amount, t.createdBy || '', t.note || '']));
     App.showToast("Đã xuất file báo cáo thu chi CSV thành công!", "success");
   }
 };
@@ -11380,7 +11702,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
   },
 
   toggleAttendance(key, attending) {
-    if (!AppStorage.isAdmin() || !this.currentSessionId) return;
+    if (!AppStorage.can('finance') || !this.currentSessionId) return;
     const data = AppStorage.loadData();
     const session = (data.sessions || []).find(s => s.id === this.currentSessionId);
     if (!session) return;
@@ -11401,7 +11723,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
   },
 
   async togglePaid(key) {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền xác nhận thu tiền!", "warning");
       return;
     }
@@ -11446,7 +11768,7 @@ ${c.mode !== 'all' ? `- Thành viên cố định: Đã trừ vào quỹ tháng.
 
   // Lưu cấu hình chia tiền vào buổi đánh + ghi khoản chi vào sổ quỹ
   async saveBill() {
-    if (!AppStorage.isAdmin()) {
+    if (!AppStorage.can('finance')) {
       App.showToast("Chỉ Ban quản trị/Thủ quỹ mới có quyền ghi sổ quỹ!", "warning");
       return;
     }
@@ -11580,6 +11902,8 @@ const SettingsModule = {
       setCheck('set-email-vote-open', mail.voteOpen !== false);
       setCheck('set-email-booked', mail.booked !== false);
       setCheck('set-email-court-full', mail.courtFull !== false);
+      setCheck('set-email-due', !!mail.dueReminder);
+      this.setValue('set-email-due-day', mail.dueReminderDay || 10);
       this.setValue('set-email-court-per', mail.courtFullPerCourt || 6);
       setCheck('set-email-cancelled', mail.cancelled !== false);
       setCheck('set-email-fixed-request', mail.fixedRequest !== false);
@@ -11597,6 +11921,7 @@ const SettingsModule = {
       this.setValue('set-push-vapid', pushCfg.vapidKey || '');
       this.refreshPushStatus();
       this.renderDeviceBackups();
+      if (window.RolesModule) RolesModule.renderPanel();
 
       const autoApproveToggle = document.getElementById('set-auto-approve');
       if (autoApproveToggle) {
@@ -11714,13 +12039,13 @@ const SettingsModule = {
   },
 
   async deleteDeviceBackup(id) {
-    if (!confirm('Xóa bản sao này khỏi thiết bị? Không ảnh hưởng dữ liệu trên máy chủ.')) return;
+    if (!(await App.confirm('Xóa bản sao này khỏi thiết bị? Không ảnh hưởng dữ liệu trên máy chủ.'))) return;
     if (await AppStorage.deleteLocalBackup(id)) App.showToast('🗑️ Đã xóa bản sao', 'success');
     this.renderDeviceBackups();
   },
 
   async restoreDeviceBackup(id) {
-    if (!confirm('Gửi bản sao này lên máy chủ?\n\nMáy chủ sẽ HỢP NHẤT: chỉ lấy lại dữ liệu bị thiếu hoặc cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò.')) return;
+    if (!(await App.confirm('Gửi bản sao này lên máy chủ?\n\nMáy chủ sẽ HỢP NHẤT: chỉ lấy lại dữ liệu bị thiếu hoặc cũ hơn, không xóa dữ liệu mới, không đổi mật khẩu/vai trò.'))) return;
     const res = await AppStorage.restoreLocalBackupToServer(id);
     App.showToast(res.message, res.success ? 'success' : 'warning');
     this.renderDeviceBackups();
@@ -11807,6 +12132,8 @@ const SettingsModule = {
         voteOpen: checked('set-email-vote-open'),
         booked: checked('set-email-booked'),
         courtFull: checked('set-email-court-full'),
+        dueReminder: checked('set-email-due'),
+        dueReminderDay: parseInt(document.getElementById('set-email-due-day')?.value) || 10,
         courtFullPerCourt: parseInt(document.getElementById('set-email-court-per')?.value) || 6,
         cancelled: checked('set-email-cancelled'),
         fixedRequest: checked('set-email-fixed-request'),
@@ -11930,13 +12257,13 @@ const SettingsModule = {
   },
 
   // Toggle giữa CSDL Vận hành thực tế và CSDL Dữ liệu thử nghiệm (Chỉ Admin)
-  switchDatabaseEnvironment(mode) {
+  async switchDatabaseEnvironment(mode) {
     const isTest = mode === 'test';
     const confirmMsg = isTest 
       ? "Chuyển sang chế độ CSDL KIỂM THỬ (TEST DEMO) với dữ liệu mẫu 10 thành viên và các buổi đánh thử nghiệm?" 
       : "Chuyển sang chế độ CSDL VẬN HÀNH THỰC TẾ (PRODUCTION)?";
 
-    if (!confirm(confirmMsg)) return;
+    if (!(await App.confirm(confirmMsg))) return;
 
     const updated = AppStorage.switchDatabaseMode(mode);
     App.showToast(`Đã chuyển sang môi trường: ${isTest ? 'CSDL Kiểm thử (Test Demo)' : 'CSDL Vận hành thực tế (Production)'}`, "success");
@@ -12056,7 +12383,7 @@ const SettingsModule = {
       App.showAuthModal('login');
       return;
     }
-    if (!confirm("⚠️ BẠN CÓ CHẮC CHẮN MUỐN ĐẶT LẠI CSDL SẠCH MẶC ĐỊNH?\n\nToàn bộ danh sách thành viên, ca đánh, quỹ tháng và sổ thu chi sẽ được đưa về 0 và đồng bộ làm sạch ngay trên database.")) {
+    if (!(await App.confirm("⚠️ BẠN CÓ CHẮC CHẮN MUỐN ĐẶT LẠI CSDL SẠCH MẶC ĐỊNH?\n\nToàn bộ danh sách thành viên, ca đánh, quỹ tháng và sổ thu chi sẽ được đưa về 0 và đồng bộ làm sạch ngay trên database."))) {
       return;
     }
     await AppStorage.resetData(true);
@@ -13507,8 +13834,17 @@ const App = {
     document.body.classList.toggle('is-member', isFixed);
     document.body.classList.toggle('is-guest', isGuest);
 
+    // Phần tử "admin-only" có data-perm: người giữ vai trò tùy chỉnh có quyền tương ứng cũng được thấy
+    const heldPerms = isAdmin ? [] : AppStorage.perms();
     document.querySelectorAll('.admin-only').forEach(el => {
-      el.style.display = isAdmin ? '' : 'none';
+      const need = el.getAttribute('data-perm');
+      const granted = !isAdmin && need && (need === 'any' ? heldPerms.length > 0 : heldPerms.includes(need));
+      if (granted) {
+        el.style.setProperty('display', el.classList.contains('nav-link') ? 'flex' : (el.tagName === 'DIV' ? 'block' : 'inline-flex'), 'important');
+      } else {
+        el.style.removeProperty('display');
+        el.style.display = isAdmin ? '' : 'none';
+      }
     });
     document.querySelectorAll('.member-fixed-only').forEach(el => {
       el.style.display = isFixed ? '' : 'none';
@@ -13586,7 +13922,8 @@ const App = {
       if (sidebarAvatar) sidebarAvatar.src = currentUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name)}&background=10b981&color=fff`;
       if (sidebarName) sidebarName.innerText = currentUser.name;
       if (sidebarRole) {
-        sidebarRole.innerText = currentUser.role === 'admin' ? '👑 Quản trị viên' : currentUser.role === 'treasurer' ? '💼 Thủ quỹ CLB' : (currentUser.type === 'fixed' ? '🏸 Thành viên CLB' : '⚡ Khách vãng lai');
+        const customRole = AppStorage.getRole(currentUser.roleId);
+        sidebarRole.innerText = currentUser.role === 'admin' ? '👑 Quản trị viên' : currentUser.role === 'treasurer' ? '💼 Thủ quỹ CLB' : customRole ? `🎖️ ${customRole.name}` : (currentUser.type === 'fixed' ? '🏸 Thành viên CLB' : '⚡ Khách vãng lai');
         sidebarRole.className = `badge ${currentUser.role === 'admin' ? 'badge-warning' : currentUser.role === 'treasurer' ? 'badge-info' : (currentUser.type === 'fixed' ? 'badge-paid' : 'badge-warning')}`;
       }
     }
@@ -13986,12 +14323,101 @@ const App = {
       if (isLarge) dialogEl.classList.add('modal-lg');
       else dialogEl.classList.remove('modal-lg');
     }
-    if (overlay) overlay.classList.add('active');
+    if (overlay) {
+      this._modalReturnFocus = document.activeElement;
+      if (!this._escBound) {
+        this._escBound = true;
+        document.addEventListener('keydown', (e) => {
+          const ov = document.getElementById('global-modal-overlay');
+          if (e.key === 'Escape' && ov && ov.classList.contains('active') && !document.querySelector('.app-dialog')) App.closeModal();
+        });
+      }
+      overlay.classList.add('active');
+      // Trợ năng: đưa tiêu điểm vào hộp thoại để bàn phím/trình đọc màn hình dùng được
+      const first = overlay.querySelector('input:not([type=hidden]), select, textarea, button.btn-primary, button.btn');
+      if (first && typeof first.focus === 'function') setTimeout(() => first.focus({ preventScroll: true }), 30);
+    }
   },
 
   closeModal() {
     const overlay = document.getElementById('global-modal-overlay');
     if (overlay) overlay.classList.remove('active');
+    const back = this._modalReturnFocus;
+    this._modalReturnFocus = null;
+    if (back && document.contains(back) && typeof back.focus === 'function') back.focus({ preventScroll: true });
+  },
+
+  // Hộp thoại xác nhận của ứng dụng (thay confirm() của trình duyệt). Trả về Promise<boolean>.
+  confirm(message, opts = {}) {
+    return new Promise((resolve) => {
+      const danger = opts.danger !== undefined ? !!opts.danger : /xóa|đặt lại|reset|hủy liên kết/i.test(String(message));
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay active app-dialog';
+      overlay.style.zIndex = '10000';
+      overlay.setAttribute('role', 'alertdialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-label', opts.title || 'Xác nhận');
+      overlay.innerHTML = `
+        <div class="modal-dialog" style="max-width: 440px;">
+          <div class="modal-header"><h3 class="modal-title">${Safe.html(opts.title || (danger ? 'Xác nhận thao tác' : 'Xác nhận'))}</h3></div>
+          <div class="modal-body">
+            <div style="white-space: pre-line; line-height: 1.55; margin-bottom: 1.1rem;">${Safe.html(String(message))}</div>
+            <div class="flex gap-2" style="justify-content: flex-end;">
+              <button type="button" class="btn btn-secondary" data-act="no">${Safe.html(opts.cancelText || 'Hủy')}</button>
+              <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-act="yes">${Safe.html(opts.okText || 'Đồng ý')}</button>
+            </div>
+          </div>
+        </div>`;
+      const previous = document.activeElement;
+      const done = (val) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (previous && document.contains(previous) && previous.focus) previous.focus({ preventScroll: true });
+        resolve(val);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+        else if (e.key === 'Tab') {
+          const btns = overlay.querySelectorAll('button');
+          const first = btns[0], last = btns[btns.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) return done(false);
+        const act = e.target.closest && e.target.closest('[data-act]');
+        if (act) done(act.getAttribute('data-act') === 'yes');
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      const okBtn = overlay.querySelector('[data-act=yes]');
+      (danger ? overlay.querySelector('[data-act=no]') : okBtn).focus();
+    });
+  },
+
+  // Hiển thị văn bản để sao chép (thay prompt() của trình duyệt)
+  showText(title, text) {
+    const id = 'show-text-area';
+    this.openModal(Safe.html(String(title || 'Sao chép')), `
+      <textarea id="${id}" class="form-control" rows="8" readonly style="width: 100%; font-size: 0.85rem;">${Safe.html(String(text || ''))}</textarea>
+      <div class="flex gap-2" style="justify-content: flex-end; margin-top: 0.75rem;">
+        <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+        <button type="button" class="btn btn-primary" onclick="App.copyShownText()"><i class="fas fa-copy"></i> Sao chép</button>
+      </div>`);
+    setTimeout(() => { const el = document.getElementById(id); if (el) el.select(); }, 40);
+  },
+
+  async copyShownText() {
+    const el = document.getElementById('show-text-area');
+    if (!el) return;
+    try {
+      await navigator.clipboard.writeText(el.value);
+    } catch (e) {
+      el.select();
+      try { document.execCommand('copy'); } catch (e2) { /* người dùng tự sao chép */ }
+    }
+    this.showToast('Đã sao chép.', 'success');
   },
 
   // Toast Notifications
@@ -14024,7 +14450,42 @@ const App = {
 };
 
 // Khởi chạy ứng dụng
+// Trợ năng: bổ sung nhãn cho nút chỉ có biểu tượng và cho thành phần bấm được nhưng không phải <button>
+const A11y = {
+  _timer: null,
+  enhance(root = document.body) {
+    root.querySelectorAll('button:not([aria-label]), a[onclick]:not([aria-label]), a[href]:not([aria-label])').forEach((el) => {
+      if ((el.textContent || '').trim()) return;
+      const label = el.getAttribute('title') || el.getAttribute('data-tooltip');
+      if (label) el.setAttribute('aria-label', label);
+    });
+    root.querySelectorAll('[onclick]:not(button):not(a):not(input):not(select):not(textarea):not([role])').forEach((el) => {
+      el.setAttribute('role', 'button');
+      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+    });
+    root.querySelectorAll('input:not([aria-label]):not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea:not([aria-label])').forEach((el) => {
+      if (el.id && document.querySelector(`label[for="${el.id}"]`)) return;
+      if (el.closest('label')) return;
+      const label = el.getAttribute('placeholder') || el.getAttribute('title');
+      if (label) el.setAttribute('aria-label', label);
+    });
+  },
+  init() {
+    document.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.getAttribute && e.target.getAttribute('role') === 'button' && !['BUTTON', 'A', 'INPUT'].includes(e.target.tagName)) {
+        e.preventDefault();
+        e.target.click();
+      }
+    });
+    const run = () => { clearTimeout(this._timer); this._timer = setTimeout(() => this.enhance(), 150); };
+    new MutationObserver(run).observe(document.body, { childList: true, subtree: true });
+    this.enhance();
+  }
+};
+window.A11y = A11y;
+
 document.addEventListener('DOMContentLoaded', () => {
+  A11y.init();
   App.init();
 });
 
