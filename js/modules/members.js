@@ -231,6 +231,11 @@ const MembersModule = {
             </div>
 
             <div class="flex gap-1">
+              ${isAdmin && !isFixed && m.role === 'member' ? `
+                <button class="btn btn-primary btn-sm" onclick="MembersModule.setMemberType(${Safe.js(m.id)}, 'fixed')" title="Nâng khách vãng lai lên thành viên chính thức (cố định)" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;">
+                  <i class="fas fa-user-check"></i> <span>Lên chính thức</span>
+                </button>
+              ` : ''}
               ${isAdmin ? `
                 <button class="btn btn-secondary btn-sm" onclick="MembersModule.openEditMemberModal(${Safe.js(m.id)})" title="Chỉnh sửa thông tin thành viên" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;">
                   <i class="fas fa-edit"></i> <span>Sửa</span>
@@ -376,11 +381,11 @@ const MembersModule = {
 
         <div class="form-group" style="background: var(--bg-input); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
           <label class="flex items-center gap-2" style="font-size: 0.85rem; font-weight: 600; cursor: pointer;">
-            <input type="checkbox" id="new-mem-account" onchange="document.getElementById('new-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <input type="checkbox" id="new-mem-account" onchange="(document.getElementById('new-mem-pwd-wrap') || { style: {} }).style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
             <span><i class="fas fa-key text-primary"></i> Tạo luôn tài khoản đăng nhập</span>
           </label>
           <div id="new-mem-pwd-wrap" style="display: none; margin-top: 0.5rem;">
-            <input type="password" id="new-mem-password" class="form-control" autocomplete="new-password" placeholder="Mật khẩu ban đầu (tối thiểu 6 ký tự, không đoán được)">
+            <input type="password" id="new-mem-password" class="form-control" autocomplete="new-password" placeholder="Mật khẩu ban đầu (tối thiểu 8 ký tự, không đoán được)">
             <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.25rem;">Gửi mật khẩu này cho thành viên; họ nên đổi ngay sau khi đăng nhập. Không đặt trùng SĐT hay 123456.</span>
           </div>
           <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.35rem;">Không tích: chỉ ghi tên (không có tài khoản).</span>
@@ -493,7 +498,7 @@ const MembersModule = {
           <label class="form-label" style="font-weight: 600; margin-bottom: 0.25rem;">
             <i class="fas fa-key text-primary"></i> ${user.username ? 'Đặt lại mật khẩu thành viên:' : 'Cấp tài khoản đăng nhập (đặt mật khẩu):'}
           </label>
-          <input type="password" id="edit-mem-password" class="form-control" placeholder="Nhập mật khẩu mới nếu muốn thay đổi (tối thiểu 6 ký tự)...">
+          <input type="password" id="edit-mem-password" class="form-control" placeholder="Nhập mật khẩu mới nếu muốn thay đổi (tối thiểu 8 ký tự)...">
           <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
             ${user.username ? 'Để trống nếu muốn giữ nguyên mật khẩu hiện tại của thành viên này.' : 'Thành viên này chưa có tài khoản. Nhập mật khẩu (cần có SĐT làm tên đăng nhập) để cấp tài khoản; để trống nếu không cần.'}
           </span>
@@ -509,7 +514,7 @@ const MembersModule = {
     App.openModal("✏️ Chỉnh sửa thông tin & Avatar thành viên", modalBody);
   },
 
-  saveEditMember(e, memberId) {
+  async saveEditMember(e, memberId) {
     if (e && e.preventDefault) e.preventDefault();
     const data = AppStorage.loadData();
     const m = (data.members || []).find(mem => mem.id === memberId);
@@ -578,8 +583,8 @@ const MembersModule = {
         else delete user.canScheduleVotes;
       }
       if (newPwd) {
-        if (newPwd.length < 6) {
-          App.showToast("Mật khẩu mới phải có tối thiểu 6 ký tự trở lên!", "error");
+        if (newPwd.length < 8) {
+          App.showToast("Mật khẩu mới phải có tối thiểu 8 ký tự trở lên!", "error");
           return;
         }
         if (/\s/.test(newPwd)) {
@@ -607,9 +612,11 @@ const MembersModule = {
     }
 
     AppStorage.reconcileUsersAndMembers(data);
-    AppStorage.saveData(data, true);
+    const saved = await AppStorage.saveDataWithCloudAck(data);
     App.closeModal();
-    App.showToast(`🎉 Đã cập nhật thông tin và ảnh đại diện của "${m.name}" thành công!`, "success");
+    App.showToast(saved.success
+      ? `🎉 Đã cập nhật thông tin và ảnh đại diện của "${m.name}" thành công!`
+      : `Đã lưu thay đổi của "${m.name}" trên máy này. ${saved.message || ''}`, saved.success ? "success" : "warning");
 
     this.renderMembersTab();
     if (window.SettingsModule) SettingsModule.renderMembersAdmin();
@@ -617,6 +624,58 @@ const MembersModule = {
     App.renderUserHeaderAndSidebar();
     if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
     if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+  },
+
+  // Nâng khách vãng lai lên thành viên chính thức (type 'fixed') hoặc ngược lại bằng 1 thao tác, có báo kết quả lưu lên máy chủ.
+  // Ghi cả hồ sơ thành viên lẫn tài khoản (nếu có) để hai bên không lệch nhau; yêu cầu "chờ duyệt" của họ (nếu có) được đóng lại.
+  async setMemberType(memberId, type) {
+    if (!AppStorage.can('members')) {
+      App.showToast('Bạn không có quyền đổi loại thành viên.', 'warning');
+      return { success: false };
+    }
+    const want = type === 'fixed' ? 'fixed' : 'guest';
+    const data = AppStorage.loadData();
+    const m = (data.members || []).find(x => x.id === memberId);
+    if (!m) return { success: false, message: 'Không tìm thấy thành viên.' };
+    if (m.role !== 'member') {
+      App.showToast('Chỉ đổi loại cho thành viên thường (không áp dụng cho Admin/Thủ quỹ).', 'warning');
+      return { success: false };
+    }
+    if (m.type === want) return { success: true, unchanged: true };
+    const label = want === 'fixed' ? 'thành viên chính thức' : 'khách vãng lai';
+    if (!(await App.confirm(`Chuyển "${m.name}" thành ${label}?` + (want === 'fixed' ? '\nHọ sẽ phải góp quỹ tháng và xem được sổ quỹ CLB.' : '\nHọ sẽ không còn góp quỹ tháng và không xem được sổ quỹ.'), { danger: false, okText: 'Chuyển' }))) {
+      return { success: false, cancelled: true };
+    }
+    m.type = want;
+    const user = (data.users || []).find(u => u.memberId === m.id || (m.username && u.username === m.username));
+    if (user) {
+      user.type = want;
+      if (want === 'fixed' && user.fixedRequest === 'pending') {
+        user.fixedRequest = 'approved';
+        user.fixedDecidedAt = Date.now();
+        const admin = AppStorage.getCurrentUser();
+        user.fixedDecidedBy = admin ? admin.username : '';
+      }
+    }
+    // Chuyển lên chính thức: tạo luôn phiếu quỹ tháng này (nếu người dùng có quyền ghi quỹ)
+    if (want === 'fixed' && AppStorage.can('finance') && window.FundModule) {
+      const month = FundModule.currentMonth;
+      const id = `due_${month}_${m.id}`;
+      if (!(data.monthlyContributions || []).some(d => d.id === id)) {
+        const fee = FundModule.getClubFee ? FundModule.getClubFee(data) : 0;
+        if (!data.monthlyContributions) data.monthlyContributions = [];
+        data.monthlyContributions.push({ id, month, memberId: m.id, amount: fee, status: 'unpaid', method: null, paidAt: null, billImage: null, approvedBy: null, approvedAt: null, note: '' });
+      }
+    }
+    const result = await AppStorage.saveDataWithCloudAck(data);
+    App.showToast(result.success
+      ? `✅ Đã chuyển "${m.name}" thành ${label}.`
+      : `"${m.name}" đã được chuyển thành ${label} trên máy này nhưng CHƯA lưu lên máy chủ: ${result.message}`, result.success ? 'success' : 'warning');
+    this.renderMembersTab();
+    if (window.MembershipModule) MembershipModule.renderPanel();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+    App.refreshDashboardStats();
+    return result;
   },
 
   async deleteMember(memberId) {
@@ -701,11 +760,11 @@ const MembersModule = {
             <input type="text" id="quick-mem-note" class="form-control" maxlength="300" placeholder="VD: Tay trái, trình độ khá...">
           </div>
           <label class="flex items-center gap-2" style="font-size: 0.85rem; cursor: pointer; margin: 0.25rem 0 0.5rem;">
-            <input type="checkbox" id="quick-mem-account" onchange="document.getElementById('quick-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <input type="checkbox" id="quick-mem-account" onchange="(document.getElementById('quick-mem-pwd-wrap') || { style: {} }).style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
             <span>Tạo luôn tài khoản đăng nhập cho người này</span>
           </label>
           <div id="quick-mem-pwd-wrap" class="form-group" style="display: none;">
-            <label class="form-label" for="quick-mem-password">Mật khẩu ban đầu * (tối thiểu 6 ký tự, không đoán được)</label>
+            <label class="form-label" for="quick-mem-password">Mật khẩu ban đầu * (tối thiểu 8 ký tự, không đoán được)</label>
             <input type="password" id="quick-mem-password" class="form-control" autocomplete="new-password" placeholder="Gửi mật khẩu này cho thành viên, họ sẽ tự đổi sau">
           </div>
           <button type="submit" class="btn btn-primary w-full btn-lg" style="margin-top: 0.75rem;">

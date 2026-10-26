@@ -62,10 +62,19 @@ const PushClient = {
   },
 
   // ---------------- Firebase ----------------
+  FIREBASE_SRI: {
+    '10.12.2': {
+      'firebase-app-compat.js': 'sha384-AQ3POAMqIhwS81FrUH95ekxqBZHeP5tG2JfEL3+7GuTtfRLWnrRh32UxwzM+//A9',
+      'firebase-messaging-compat.js': 'sha384-XtSlZdmg0Ad5zf0AX4W9TGdm+dGjaNK4KG3lNFjfgbnxkCEuT9ugWXkLExgQTJ+6'
+    }
+  },
+
   _script(src) {
     return new Promise((resolve, reject) => {
       const el = document.createElement('script');
       el.src = src;
+      const sri = (this.FIREBASE_SRI[this.FIREBASE_VERSION] || {})[src.split('/').pop()];
+      if (sri) { el.integrity = sri; el.crossOrigin = 'anonymous'; }
       el.async = true;
       el.onload = () => resolve();
       el.onerror = () => reject(new Error('Không tải được thư viện thông báo (kiểm tra kết nối mạng)'));

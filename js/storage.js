@@ -707,12 +707,13 @@ const AppStorage = {
   // và được máy chủ kiểm quyền. Trình duyệt không còn giữ/so khớp mật khẩu của bất kỳ ai.
   // ==========================================
 
-  // Thời gian hết hạn do không hoạt động (15 phút)
-  INACTIVITY_TIMEOUT: 15 * 60 * 1000,
-  // Thời gian sống của phiên khi tick "Ghi nhớ" (24 giờ)
-  SESSION_REMEMBER_TTL: 24 * 60 * 60 * 1000,
-  // Thời gian sống của phiên tạm thời khi không tick "Ghi nhớ" (2 giờ)
-  SESSION_TEMP_TTL: 2 * 60 * 60 * 1000,
+  // Thiết bị KHÔNG tick "Duy trì đăng nhập" (máy dùng chung): tự đăng xuất sau 30 phút không thao tác, và khi đóng trình duyệt
+  INACTIVITY_TIMEOUT: 30 * 60 * 1000,
+  // Tick "Duy trì đăng nhập": không bị đăng xuất vì không thao tác; phiên sống tới khi token hết hạn (máy chủ quyết định:
+  // 30 ngày thành viên / 7 ngày Ban quản trị) và được gia hạn trượt mỗi khi dùng ứng dụng.
+  SESSION_REMEMBER_TTL: 30 * 24 * 60 * 60 * 1000,
+  SESSION_TEMP_TTL: 8 * 60 * 60 * 1000,
+  REFRESH_CHECK_MS: 30 * 60 * 1000,
 
   _authKey() {
     return this._ns() + AUTH_SESSION_KEY;
@@ -784,9 +785,9 @@ const AppStorage = {
         return null;
       }
 
-      // 2. Kiểm tra thời gian không hoạt động (Inactivity Timeout 15 phút)
-      if (session.lastActivity && (now - session.lastActivity > this.INACTIVITY_TIMEOUT)) {
-        console.warn("[Auth] Quá 15 phút không có thao tác. Tự động đăng xuất.");
+      // 2. Kiểm tra thời gian không hoạt động (chỉ áp dụng cho phiên KHÔNG duy trì đăng nhập)
+      if (!session.remember && session.lastActivity && (now - session.lastActivity > this.INACTIVITY_TIMEOUT)) {
+        console.warn("[Auth] Quá 30 phút không có thao tác. Tự động đăng xuất.");
         this.logout(false);
         return null;
       }
@@ -995,7 +996,7 @@ const AppStorage = {
   },
 
   _passwordPolicyError(pwd, confirm) {
-    if (pwd.length < 6) return "Mật khẩu bắt buộc phải có độ dài tối thiểu từ 6 ký tự trở lên!";
+    if (pwd.length < 8) return "Mật khẩu bắt buộc phải có độ dài tối thiểu từ 8 ký tự trở lên!";
     if (/\s/.test(pwd)) return "Mật khẩu không được chứa khoảng trắng!";
     if (confirm !== undefined && pwd !== String(confirm).trim()) return "Mật khẩu xác nhận không khớp, vui lòng kiểm tra lại!";
     return null;
@@ -1022,6 +1023,8 @@ const AppStorage = {
   // Lưu phiên đăng nhập do máy chủ cấp
   _startSession(user, token, remember, mustChange) {
     const now = Date.now();
+    const tokenExp = Number((AuthCore.readToken(token) || {}).exp) || 0;
+    const ttlEnd = now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL);
     this._writeSession({
       id: user.id,
       username: user.username,
@@ -1031,7 +1034,7 @@ const AppStorage = {
       loginAt: new Date().toISOString(),
       lastActivity: now,
       remember: !!remember,
-      expiresAt: now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL),
+      expiresAt: tokenExp ? Math.min(ttlEnd, tokenExp) : ttlEnd,
       token: token || null,
       mustChange: !!mustChange,
       user: user
@@ -1050,6 +1053,79 @@ const AppStorage = {
     this._invalidateView();
     this._emitChanged();
     this.requestSync(0);
+  },
+
+  // Gia hạn phiên (trượt) khi token còn dưới nửa đời. Gọi lúc mở ứng dụng, khi quay lại tab và mỗi 30 phút.
+  // Trả về true nếu phiên còn hiệu lực. Máy chủ báo token không còn hợp lệ (đổi mật khẩu / đăng xuất thiết bị khác) -> đăng xuất.
+  async refreshSession(force = false) {
+    if (this.isLocalOnly()) return true;
+    const session = this._readSession();
+    if (!session || !session.token) return false;
+    const p = AuthCore.readToken(session.token);
+    if (!p || !(Number(p.exp) > Date.now())) return false;
+    const life = this._tokenLifeFor(session.role);
+    if (!force && Number(p.exp) - Date.now() > life / 2) return true; // Còn lâu mới hết hạn
+    if (this._refreshing) return this._refreshing;
+    this._refreshing = (async () => {
+      const res = await this._authRequest({ action: 'refresh', token: session.token });
+      if (res.status === 'auth') {
+        this.logout(false);
+        if (window.App && App.showToast) App.showToast('Phiên đăng nhập đã hết hiệu lực (có thể mật khẩu vừa được đổi). Vui lòng đăng nhập lại.', 'warning');
+        return false;
+      }
+      if (res.status !== 'ok' || !res.token) return true; // Mất mạng/lỗi tạm thời: giữ phiên, thử lại sau
+      this._adoptToken(res.token, res.user);
+      return true;
+    })().finally(() => { this._refreshing = null; });
+    return this._refreshing;
+  },
+
+  _tokenLifeFor(role) {
+    return (role === 'admin' || role === 'treasurer') ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+  },
+
+  // Thay token mới vào phiên hiện tại (không đổi người dùng / lựa chọn "duy trì")
+  _adoptToken(token, user) {
+    const session = this._readSession();
+    if (!session) return;
+    const exp = Number((AuthCore.readToken(token) || {}).exp) || 0;
+    session.token = token;
+    if (exp) session.expiresAt = session.remember ? exp : Math.min(session.expiresAt || exp, exp);
+    if (user) session.user = user;
+    this._writeSession(session);
+    const map = this._getTokens();
+    map[session.username] = token;
+    this._setTokens(map);
+    this._deferredTokens = {};
+    this.requestSync(0);
+  },
+
+  // "Đăng xuất các thiết bị khác" (thu hồi mọi token cũ; thiết bị này nhận token mới)
+  async logoutOtherDevices() {
+    const session = this._readSession();
+    if (!session || !session.token) return { success: false, message: 'Bạn chưa đăng nhập.' };
+    const res = await this._authRequest({ action: 'logoutOthers', token: session.token });
+    if (res.status !== 'ok' || !res.token) return { success: false, message: res.message || 'Không thực hiện được.' };
+    this._adoptToken(res.token, res.user);
+    return { success: true, message: res.message };
+  },
+
+  sessionInfo() {
+    const s = this._readSession();
+    if (!s) return null;
+    return { remember: !!s.remember, expiresAt: s.expiresAt || 0, loginAt: s.loginAt };
+  },
+
+  // Mật khẩu KHÔNG bao giờ được lưu bởi ứng dụng. Chỉ nhờ trình duyệt/Trình quản lý mật khẩu của thiết bị đề nghị lưu
+  // (Credential Management API) để lần sau tự điền; người dùng toàn quyền đồng ý hoặc từ chối.
+  async offerSavePassword(username, password, name) {
+    try {
+      if (typeof window === 'undefined' || !window.PasswordCredential || !navigator.credentials || !navigator.credentials.store) return false;
+      await navigator.credentials.store(new window.PasswordCredential({ id: String(username), password: String(password), name: name || String(username) }));
+      return true;
+    } catch (e) {
+      return false;
+    }
   },
 
   // Đăng nhập hệ thống (xác thực trên máy chủ)
@@ -1074,6 +1150,7 @@ const AppStorage = {
     const res = await this._authRequest({ action: 'login', username: input, password: pwd });
     if (res.status !== 'ok') return { success: false, message: res.message || "Đăng nhập thất bại!" };
     this._startSession(res.user, res.token, remember, res.mustChange);
+    if (remember && !res.mustChange) this.offerSavePassword(input, pwd, res.user && res.user.name);
     return { success: true, user: this.getCurrentUser() || res.user, mustChange: !!res.mustChange, message: res.message };
   },
 

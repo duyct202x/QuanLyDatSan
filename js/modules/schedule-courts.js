@@ -68,7 +68,7 @@ Object.assign(ScheduleModule, {
         </button>
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
-          <a href="${Safe.url(directMapsUrl)}" target="_blank" class="btn btn-primary">
+          <a href="${Safe.url(directMapsUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
             <i class="fas fa-directions"></i> Mở Google Maps
           </a>
         </div>

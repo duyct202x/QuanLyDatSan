@@ -1915,12 +1915,13 @@ const AppStorage = {
   // và được máy chủ kiểm quyền. Trình duyệt không còn giữ/so khớp mật khẩu của bất kỳ ai.
   // ==========================================
 
-  // Thời gian hết hạn do không hoạt động (15 phút)
-  INACTIVITY_TIMEOUT: 15 * 60 * 1000,
-  // Thời gian sống của phiên khi tick "Ghi nhớ" (24 giờ)
-  SESSION_REMEMBER_TTL: 24 * 60 * 60 * 1000,
-  // Thời gian sống của phiên tạm thời khi không tick "Ghi nhớ" (2 giờ)
-  SESSION_TEMP_TTL: 2 * 60 * 60 * 1000,
+  // Thiết bị KHÔNG tick "Duy trì đăng nhập" (máy dùng chung): tự đăng xuất sau 30 phút không thao tác, và khi đóng trình duyệt
+  INACTIVITY_TIMEOUT: 30 * 60 * 1000,
+  // Tick "Duy trì đăng nhập": không bị đăng xuất vì không thao tác; phiên sống tới khi token hết hạn (máy chủ quyết định:
+  // 30 ngày thành viên / 7 ngày Ban quản trị) và được gia hạn trượt mỗi khi dùng ứng dụng.
+  SESSION_REMEMBER_TTL: 30 * 24 * 60 * 60 * 1000,
+  SESSION_TEMP_TTL: 8 * 60 * 60 * 1000,
+  REFRESH_CHECK_MS: 30 * 60 * 1000,
 
   _authKey() {
     return this._ns() + AUTH_SESSION_KEY;
@@ -1992,9 +1993,9 @@ const AppStorage = {
         return null;
       }
 
-      // 2. Kiểm tra thời gian không hoạt động (Inactivity Timeout 15 phút)
-      if (session.lastActivity && (now - session.lastActivity > this.INACTIVITY_TIMEOUT)) {
-        console.warn("[Auth] Quá 15 phút không có thao tác. Tự động đăng xuất.");
+      // 2. Kiểm tra thời gian không hoạt động (chỉ áp dụng cho phiên KHÔNG duy trì đăng nhập)
+      if (!session.remember && session.lastActivity && (now - session.lastActivity > this.INACTIVITY_TIMEOUT)) {
+        console.warn("[Auth] Quá 30 phút không có thao tác. Tự động đăng xuất.");
         this.logout(false);
         return null;
       }
@@ -2203,7 +2204,7 @@ const AppStorage = {
   },
 
   _passwordPolicyError(pwd, confirm) {
-    if (pwd.length < 6) return "Mật khẩu bắt buộc phải có độ dài tối thiểu từ 6 ký tự trở lên!";
+    if (pwd.length < 8) return "Mật khẩu bắt buộc phải có độ dài tối thiểu từ 8 ký tự trở lên!";
     if (/\s/.test(pwd)) return "Mật khẩu không được chứa khoảng trắng!";
     if (confirm !== undefined && pwd !== String(confirm).trim()) return "Mật khẩu xác nhận không khớp, vui lòng kiểm tra lại!";
     return null;
@@ -2230,6 +2231,8 @@ const AppStorage = {
   // Lưu phiên đăng nhập do máy chủ cấp
   _startSession(user, token, remember, mustChange) {
     const now = Date.now();
+    const tokenExp = Number((AuthCore.readToken(token) || {}).exp) || 0;
+    const ttlEnd = now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL);
     this._writeSession({
       id: user.id,
       username: user.username,
@@ -2239,7 +2242,7 @@ const AppStorage = {
       loginAt: new Date().toISOString(),
       lastActivity: now,
       remember: !!remember,
-      expiresAt: now + (remember ? this.SESSION_REMEMBER_TTL : this.SESSION_TEMP_TTL),
+      expiresAt: tokenExp ? Math.min(ttlEnd, tokenExp) : ttlEnd,
       token: token || null,
       mustChange: !!mustChange,
       user: user
@@ -2258,6 +2261,79 @@ const AppStorage = {
     this._invalidateView();
     this._emitChanged();
     this.requestSync(0);
+  },
+
+  // Gia hạn phiên (trượt) khi token còn dưới nửa đời. Gọi lúc mở ứng dụng, khi quay lại tab và mỗi 30 phút.
+  // Trả về true nếu phiên còn hiệu lực. Máy chủ báo token không còn hợp lệ (đổi mật khẩu / đăng xuất thiết bị khác) -> đăng xuất.
+  async refreshSession(force = false) {
+    if (this.isLocalOnly()) return true;
+    const session = this._readSession();
+    if (!session || !session.token) return false;
+    const p = AuthCore.readToken(session.token);
+    if (!p || !(Number(p.exp) > Date.now())) return false;
+    const life = this._tokenLifeFor(session.role);
+    if (!force && Number(p.exp) - Date.now() > life / 2) return true; // Còn lâu mới hết hạn
+    if (this._refreshing) return this._refreshing;
+    this._refreshing = (async () => {
+      const res = await this._authRequest({ action: 'refresh', token: session.token });
+      if (res.status === 'auth') {
+        this.logout(false);
+        if (window.App && App.showToast) App.showToast('Phiên đăng nhập đã hết hiệu lực (có thể mật khẩu vừa được đổi). Vui lòng đăng nhập lại.', 'warning');
+        return false;
+      }
+      if (res.status !== 'ok' || !res.token) return true; // Mất mạng/lỗi tạm thời: giữ phiên, thử lại sau
+      this._adoptToken(res.token, res.user);
+      return true;
+    })().finally(() => { this._refreshing = null; });
+    return this._refreshing;
+  },
+
+  _tokenLifeFor(role) {
+    return (role === 'admin' || role === 'treasurer') ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+  },
+
+  // Thay token mới vào phiên hiện tại (không đổi người dùng / lựa chọn "duy trì")
+  _adoptToken(token, user) {
+    const session = this._readSession();
+    if (!session) return;
+    const exp = Number((AuthCore.readToken(token) || {}).exp) || 0;
+    session.token = token;
+    if (exp) session.expiresAt = session.remember ? exp : Math.min(session.expiresAt || exp, exp);
+    if (user) session.user = user;
+    this._writeSession(session);
+    const map = this._getTokens();
+    map[session.username] = token;
+    this._setTokens(map);
+    this._deferredTokens = {};
+    this.requestSync(0);
+  },
+
+  // "Đăng xuất các thiết bị khác" (thu hồi mọi token cũ; thiết bị này nhận token mới)
+  async logoutOtherDevices() {
+    const session = this._readSession();
+    if (!session || !session.token) return { success: false, message: 'Bạn chưa đăng nhập.' };
+    const res = await this._authRequest({ action: 'logoutOthers', token: session.token });
+    if (res.status !== 'ok' || !res.token) return { success: false, message: res.message || 'Không thực hiện được.' };
+    this._adoptToken(res.token, res.user);
+    return { success: true, message: res.message };
+  },
+
+  sessionInfo() {
+    const s = this._readSession();
+    if (!s) return null;
+    return { remember: !!s.remember, expiresAt: s.expiresAt || 0, loginAt: s.loginAt };
+  },
+
+  // Mật khẩu KHÔNG bao giờ được lưu bởi ứng dụng. Chỉ nhờ trình duyệt/Trình quản lý mật khẩu của thiết bị đề nghị lưu
+  // (Credential Management API) để lần sau tự điền; người dùng toàn quyền đồng ý hoặc từ chối.
+  async offerSavePassword(username, password, name) {
+    try {
+      if (typeof window === 'undefined' || !window.PasswordCredential || !navigator.credentials || !navigator.credentials.store) return false;
+      await navigator.credentials.store(new window.PasswordCredential({ id: String(username), password: String(password), name: name || String(username) }));
+      return true;
+    } catch (e) {
+      return false;
+    }
   },
 
   // Đăng nhập hệ thống (xác thực trên máy chủ)
@@ -2282,6 +2358,7 @@ const AppStorage = {
     const res = await this._authRequest({ action: 'login', username: input, password: pwd });
     if (res.status !== 'ok') return { success: false, message: res.message || "Đăng nhập thất bại!" };
     this._startSession(res.user, res.token, remember, res.mustChange);
+    if (remember && !res.mustChange) this.offerSavePassword(input, pwd, res.user && res.user.name);
     return { success: true, user: this.getCurrentUser() || res.user, mustChange: !!res.mustChange, message: res.message };
   },
 
@@ -3383,6 +3460,11 @@ const MembersModule = {
             </div>
 
             <div class="flex gap-1">
+              ${isAdmin && !isFixed && m.role === 'member' ? `
+                <button class="btn btn-primary btn-sm" onclick="MembersModule.setMemberType(${Safe.js(m.id)}, 'fixed')" title="Nâng khách vãng lai lên thành viên chính thức (cố định)" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;">
+                  <i class="fas fa-user-check"></i> <span>Lên chính thức</span>
+                </button>
+              ` : ''}
               ${isAdmin ? `
                 <button class="btn btn-secondary btn-sm" onclick="MembersModule.openEditMemberModal(${Safe.js(m.id)})" title="Chỉnh sửa thông tin thành viên" style="padding: 0.25rem 0.55rem; font-size: 0.75rem;">
                   <i class="fas fa-edit"></i> <span>Sửa</span>
@@ -3528,11 +3610,11 @@ const MembersModule = {
 
         <div class="form-group" style="background: var(--bg-input); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
           <label class="flex items-center gap-2" style="font-size: 0.85rem; font-weight: 600; cursor: pointer;">
-            <input type="checkbox" id="new-mem-account" onchange="document.getElementById('new-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <input type="checkbox" id="new-mem-account" onchange="(document.getElementById('new-mem-pwd-wrap') || { style: {} }).style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
             <span><i class="fas fa-key text-primary"></i> Tạo luôn tài khoản đăng nhập</span>
           </label>
           <div id="new-mem-pwd-wrap" style="display: none; margin-top: 0.5rem;">
-            <input type="password" id="new-mem-password" class="form-control" autocomplete="new-password" placeholder="Mật khẩu ban đầu (tối thiểu 6 ký tự, không đoán được)">
+            <input type="password" id="new-mem-password" class="form-control" autocomplete="new-password" placeholder="Mật khẩu ban đầu (tối thiểu 8 ký tự, không đoán được)">
             <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.25rem;">Gửi mật khẩu này cho thành viên; họ nên đổi ngay sau khi đăng nhập. Không đặt trùng SĐT hay 123456.</span>
           </div>
           <span class="text-secondary" style="font-size: 0.75rem; display: block; margin-top: 0.35rem;">Không tích: chỉ ghi tên (không có tài khoản).</span>
@@ -3645,7 +3727,7 @@ const MembersModule = {
           <label class="form-label" style="font-weight: 600; margin-bottom: 0.25rem;">
             <i class="fas fa-key text-primary"></i> ${user.username ? 'Đặt lại mật khẩu thành viên:' : 'Cấp tài khoản đăng nhập (đặt mật khẩu):'}
           </label>
-          <input type="password" id="edit-mem-password" class="form-control" placeholder="Nhập mật khẩu mới nếu muốn thay đổi (tối thiểu 6 ký tự)...">
+          <input type="password" id="edit-mem-password" class="form-control" placeholder="Nhập mật khẩu mới nếu muốn thay đổi (tối thiểu 8 ký tự)...">
           <span class="text-secondary" style="font-size: 0.75rem; margin-top: 0.25rem; display: block;">
             ${user.username ? 'Để trống nếu muốn giữ nguyên mật khẩu hiện tại của thành viên này.' : 'Thành viên này chưa có tài khoản. Nhập mật khẩu (cần có SĐT làm tên đăng nhập) để cấp tài khoản; để trống nếu không cần.'}
           </span>
@@ -3661,7 +3743,7 @@ const MembersModule = {
     App.openModal("✏️ Chỉnh sửa thông tin & Avatar thành viên", modalBody);
   },
 
-  saveEditMember(e, memberId) {
+  async saveEditMember(e, memberId) {
     if (e && e.preventDefault) e.preventDefault();
     const data = AppStorage.loadData();
     const m = (data.members || []).find(mem => mem.id === memberId);
@@ -3730,8 +3812,8 @@ const MembersModule = {
         else delete user.canScheduleVotes;
       }
       if (newPwd) {
-        if (newPwd.length < 6) {
-          App.showToast("Mật khẩu mới phải có tối thiểu 6 ký tự trở lên!", "error");
+        if (newPwd.length < 8) {
+          App.showToast("Mật khẩu mới phải có tối thiểu 8 ký tự trở lên!", "error");
           return;
         }
         if (/\s/.test(newPwd)) {
@@ -3759,9 +3841,11 @@ const MembersModule = {
     }
 
     AppStorage.reconcileUsersAndMembers(data);
-    AppStorage.saveData(data, true);
+    const saved = await AppStorage.saveDataWithCloudAck(data);
     App.closeModal();
-    App.showToast(`🎉 Đã cập nhật thông tin và ảnh đại diện của "${m.name}" thành công!`, "success");
+    App.showToast(saved.success
+      ? `🎉 Đã cập nhật thông tin và ảnh đại diện của "${m.name}" thành công!`
+      : `Đã lưu thay đổi của "${m.name}" trên máy này. ${saved.message || ''}`, saved.success ? "success" : "warning");
 
     this.renderMembersTab();
     if (window.SettingsModule) SettingsModule.renderMembersAdmin();
@@ -3769,6 +3853,58 @@ const MembersModule = {
     App.renderUserHeaderAndSidebar();
     if (window.App && typeof App.refreshDashboardStats === 'function') App.refreshDashboardStats();
     if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+  },
+
+  // Nâng khách vãng lai lên thành viên chính thức (type 'fixed') hoặc ngược lại bằng 1 thao tác, có báo kết quả lưu lên máy chủ.
+  // Ghi cả hồ sơ thành viên lẫn tài khoản (nếu có) để hai bên không lệch nhau; yêu cầu "chờ duyệt" của họ (nếu có) được đóng lại.
+  async setMemberType(memberId, type) {
+    if (!AppStorage.can('members')) {
+      App.showToast('Bạn không có quyền đổi loại thành viên.', 'warning');
+      return { success: false };
+    }
+    const want = type === 'fixed' ? 'fixed' : 'guest';
+    const data = AppStorage.loadData();
+    const m = (data.members || []).find(x => x.id === memberId);
+    if (!m) return { success: false, message: 'Không tìm thấy thành viên.' };
+    if (m.role !== 'member') {
+      App.showToast('Chỉ đổi loại cho thành viên thường (không áp dụng cho Admin/Thủ quỹ).', 'warning');
+      return { success: false };
+    }
+    if (m.type === want) return { success: true, unchanged: true };
+    const label = want === 'fixed' ? 'thành viên chính thức' : 'khách vãng lai';
+    if (!(await App.confirm(`Chuyển "${m.name}" thành ${label}?` + (want === 'fixed' ? '\nHọ sẽ phải góp quỹ tháng và xem được sổ quỹ CLB.' : '\nHọ sẽ không còn góp quỹ tháng và không xem được sổ quỹ.'), { danger: false, okText: 'Chuyển' }))) {
+      return { success: false, cancelled: true };
+    }
+    m.type = want;
+    const user = (data.users || []).find(u => u.memberId === m.id || (m.username && u.username === m.username));
+    if (user) {
+      user.type = want;
+      if (want === 'fixed' && user.fixedRequest === 'pending') {
+        user.fixedRequest = 'approved';
+        user.fixedDecidedAt = Date.now();
+        const admin = AppStorage.getCurrentUser();
+        user.fixedDecidedBy = admin ? admin.username : '';
+      }
+    }
+    // Chuyển lên chính thức: tạo luôn phiếu quỹ tháng này (nếu người dùng có quyền ghi quỹ)
+    if (want === 'fixed' && AppStorage.can('finance') && window.FundModule) {
+      const month = FundModule.currentMonth;
+      const id = `due_${month}_${m.id}`;
+      if (!(data.monthlyContributions || []).some(d => d.id === id)) {
+        const fee = FundModule.getClubFee ? FundModule.getClubFee(data) : 0;
+        if (!data.monthlyContributions) data.monthlyContributions = [];
+        data.monthlyContributions.push({ id, month, memberId: m.id, amount: fee, status: 'unpaid', method: null, paidAt: null, billImage: null, approvedBy: null, approvedAt: null, note: '' });
+      }
+    }
+    const result = await AppStorage.saveDataWithCloudAck(data);
+    App.showToast(result.success
+      ? `✅ Đã chuyển "${m.name}" thành ${label}.`
+      : `"${m.name}" đã được chuyển thành ${label} trên máy này nhưng CHƯA lưu lên máy chủ: ${result.message}`, result.success ? 'success' : 'warning');
+    this.renderMembersTab();
+    if (window.MembershipModule) MembershipModule.renderPanel();
+    if (window.FundModule && typeof FundModule.renderFundDashboard === 'function') FundModule.renderFundDashboard();
+    App.refreshDashboardStats();
+    return result;
   },
 
   async deleteMember(memberId) {
@@ -3853,11 +3989,11 @@ const MembersModule = {
             <input type="text" id="quick-mem-note" class="form-control" maxlength="300" placeholder="VD: Tay trái, trình độ khá...">
           </div>
           <label class="flex items-center gap-2" style="font-size: 0.85rem; cursor: pointer; margin: 0.25rem 0 0.5rem;">
-            <input type="checkbox" id="quick-mem-account" onchange="document.getElementById('quick-mem-pwd-wrap').style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
+            <input type="checkbox" id="quick-mem-account" onchange="(document.getElementById('quick-mem-pwd-wrap') || { style: {} }).style.display = this.checked ? 'block' : 'none'" style="accent-color: var(--primary);">
             <span>Tạo luôn tài khoản đăng nhập cho người này</span>
           </label>
           <div id="quick-mem-pwd-wrap" class="form-group" style="display: none;">
-            <label class="form-label" for="quick-mem-password">Mật khẩu ban đầu * (tối thiểu 6 ký tự, không đoán được)</label>
+            <label class="form-label" for="quick-mem-password">Mật khẩu ban đầu * (tối thiểu 8 ký tự, không đoán được)</label>
             <input type="password" id="quick-mem-password" class="form-control" autocomplete="new-password" placeholder="Gửi mật khẩu này cho thành viên, họ sẽ tự đổi sau">
           </div>
           <button type="submit" class="btn btn-primary w-full btn-lg" style="margin-top: 0.75rem;">
@@ -4262,6 +4398,12 @@ const ScheduleModule = {
     this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
   },
 
+  // Buổi mà thành viên đã bình chọn "đi" (hoặc chọn phương án ở buổi khảo sát)
+  isMine(session, memberId) {
+    if (!session || !memberId) return false;
+    return (session.votes || []).some(v => v && v.memberId === memberId && (session.voteMode === 'multi_option' ? !v.notGoing && (v.selectedOptions || []).length > 0 : v.status === 'going'));
+  },
+
   // Safe Date-Time Parser to prevent Invalid Date exceptions
   parseSessionDateTime(dateStr, timeStr) {
     if (!dateStr) return new Date();
@@ -4424,6 +4566,7 @@ const ScheduleModule = {
       const sessionDate = this.parseSessionDateTime(s.date, s.endTime || '23:59');
       if (filter === 'upcoming') return sessionDate >= now;
       if (filter === 'past') return sessionDate < now;
+      if (filter === 'mine') return sessionDate >= now && s.status !== 'cancelled' && this.isMine(s, currentMemberId);
       return true;
     }).sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
 
@@ -4764,8 +4907,10 @@ Object.assign(ScheduleModule, {
     // Số buổi ở các bộ lọc: Sắp diễn ra / Đã kết thúc / Tất cả
     const nowTs = new Date();
     const upcomingN = sessions.filter(s => this.parseSessionDateTime(s.date, s.endTime || '23:59') >= nowTs).length;
-    const counts = { upcoming: upcomingN, past: sessions.length - upcomingN, all: sessions.length };
-    const baseLabels = { upcoming: 'Sắp diễn ra', past: 'Đã kết thúc', all: 'Tất cả' };
+    const me = AppStorage.getCurrentUser();
+    const mineN = me ? sessions.filter(s => s.status !== 'cancelled' && this.parseSessionDateTime(s.date, s.endTime || '23:59') >= nowTs && this.isMine(s, me.memberId)).length : 0;
+    const counts = { upcoming: upcomingN, past: sessions.length - upcomingN, all: sessions.length, mine: mineN };
+    const baseLabels = { upcoming: 'Sắp diễn ra', past: 'Đã kết thúc', all: 'Tất cả', mine: 'Của tôi' };
     document.querySelectorAll('#tab-schedule .filter-tab').forEach(btn => {
       const f = btn.getAttribute('data-filter');
       const label = btn.querySelector('span');
@@ -4816,6 +4961,9 @@ Object.assign(ScheduleModule, {
       if (filter === 'past') {
         listTitle.innerHTML = '<i class="fas fa-history text-secondary"></i> Danh sách buổi đánh đã kết thúc';
         if (listSubtitle) listSubtitle.innerText = 'Lịch sử các trận đấu đã diễn ra và chốt số lượng người tham gia';
+      } else if (filter === 'mine') {
+        listTitle.innerHTML = '<i class="fas fa-user-check text-primary"></i> Các buổi bạn đã đăng ký đi';
+        if (listSubtitle) listSubtitle.innerText = 'Buổi sắp tới mà bạn đã bình chọn tham gia';
       } else if (filter === 'all') {
         listTitle.innerHTML = '<i class="fas fa-list-check text-primary"></i> Tất cả buổi đánh & khảo sát';
         if (listSubtitle) listSubtitle.innerText = 'Toàn bộ danh sách lịch đặt sân đã lưu trên hệ thống';
@@ -5548,6 +5696,9 @@ Object.assign(ScheduleModule, {
           <button class="btn btn-secondary" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})">
             <i class="fas fa-share-alt"></i> Chia sẻ Zalo
           </button>
+          <button class="btn btn-secondary" onclick="UtilitiesModule.addToCalendar(${Safe.js(session.id)})" title="Thêm vào lịch điện thoại">
+            <i class="far fa-calendar-plus"></i> Thêm vào lịch
+          </button>
           ${isAdmin ? `
             <button class="btn btn-outline-danger" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi khảo sát này">
               <i class="fas fa-trash-alt"></i> Xóa buổi này
@@ -5667,6 +5818,7 @@ Object.assign(ScheduleModule, {
             <div class="progress-bar-fill" style="width: ${capPercent}%;"></div>
           </div>
         </div>
+        ${UtilitiesModule.waitlistHtml(session, going, members)}
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
@@ -5713,7 +5865,7 @@ Object.assign(ScheduleModule, {
             <button type="button" class="btn btn-outline-primary btn-sm" onclick="ScheduleModule.copyAddress(${Safe.js(session.courtAddress || (data.clubInfo ? data.clubInfo.address : "") || session.courtName || session.court || "Sân cầu lông")})" title="Sao chép địa chỉ">
               <i class="far fa-copy"></i> Sao chép
             </button>
-            <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" class="btn btn-primary btn-sm" title="Mở bản đồ Google Maps và dẫn đường">
+            <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Mở bản đồ Google Maps và dẫn đường">
               <i class="fas fa-directions"></i> Chỉ đường Maps
             </a>
           </div>
@@ -5730,7 +5882,7 @@ Object.assign(ScheduleModule, {
             referrerpolicy="no-referrer-when-downgrade"
             src="https://maps.google.com/maps?q=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}&t=&z=15&ie=UTF8&iwloc=&output=embed">
           </iframe>
-          <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" class="map-overlay-badge">
+          <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" rel="noopener noreferrer" class="map-overlay-badge">
             <i class="fas fa-external-link-alt text-primary"></i> Mở Google Maps
           </a>
         </div>
@@ -5765,6 +5917,9 @@ Object.assign(ScheduleModule, {
         </button>
         <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})">
           <i class="fas fa-share-alt"></i> Chia sẻ Zalo
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="UtilitiesModule.addToCalendar(${Safe.js(session.id)})" title="Thêm vào lịch điện thoại">
+          <i class="far fa-calendar-plus"></i> Thêm vào lịch
         </button>
         ${isAdmin ? `
           <button class="btn btn-secondary btn-sm" onclick="App.closeModal(); App.openTab('bill-splitter'); BillSplitterModule.loadSessionForBill(${Safe.js(session.id)});">
@@ -6030,7 +6185,7 @@ Object.assign(ScheduleModule, {
         </button>
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
-          <a href="${Safe.url(directMapsUrl)}" target="_blank" class="btn btn-primary">
+          <a href="${Safe.url(directMapsUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
             <i class="fas fa-directions"></i> Mở Google Maps
           </a>
         </div>
@@ -9172,6 +9327,232 @@ const RolesModule = {
 window.RolesModule = RolesModule;
 ;
 
+// ===== js/modules/utilities.js =====
+// UtilitiesModule - Tiện ích cho người dùng
+//  1) Thêm buổi đánh vào lịch điện thoại (.ics) hoặc Google Calendar
+//  2) Danh sách dự bị khi vượt sức chứa (suy ra từ thứ tự bình chọn, không lưu thêm dữ liệu)
+//  3) Chuyên cần 90 ngày: ai đi nhiều nhất (dựa trên bình chọn "đi" ở buổi đã kết thúc; chưa phải điểm danh thực tế)
+//  4) Nút "Cài ứng dụng" (PWA) cho Android/Chrome và hướng dẫn cho iPhone
+const UtilitiesModule = {
+  _installEvent: null,
+  _debounce: null,
+
+  init() {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this._installEvent = e;
+      this.renderInstall();
+    });
+    window.addEventListener('appinstalled', () => { this._installEvent = null; this.renderInstall(); });
+    window.addEventListener('app-state-changed', () => {
+      clearTimeout(this._debounce);
+      this._debounce = setTimeout(() => this.renderAttendanceCard(), 500);
+    });
+    setTimeout(() => { this.renderInstall(); this.renderAttendanceCard(); }, 1200);
+  },
+
+  // ---------------- 1) Thêm vào lịch ----------------
+  _vnParts(dateStr, timeStr) {
+    const d = String(dateStr || '').replace(/-/g, '');
+    const t = String(timeStr || '18:00').replace(':', '').slice(0, 4).padEnd(4, '0');
+    return /^\d{8}$/.test(d) ? `${d}T${t}00` : '';
+  },
+
+  _icsEscape(s) {
+    return String(s || '').replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/([,;])/g, '\\$1');
+  },
+
+  // Gấp dòng theo RFC 5545 (tối đa 75 byte/dòng; xấp xỉ theo ký tự là đủ cho trình xem lịch phổ biến)
+  _fold(line) {
+    const out = [];
+    let rest = line;
+    while (rest.length > 74) { out.push(rest.slice(0, 74)); rest = ' ' + rest.slice(74); }
+    out.push(rest);
+    return out.join('\r\n');
+  },
+
+  buildIcs(session, club) {
+    const start = this._vnParts(session.date, session.startTime);
+    if (!start) return '';
+    const end = this._vnParts(session.date, session.endTime || session.startTime) || start;
+    const where = [session.courtName, session.courtNumbers && `(${session.courtNumbers})`, session.courtAddress].filter(Boolean).join(' ');
+    const lines = [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//SMASH PRO//Lich dat san//VI', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      `UID:${String(session.id).replace(/[^A-Za-z0-9_.-]/g, '')}@smash-pro`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')}`,
+      `DTSTART;TZID=Asia/Ho_Chi_Minh:${start}`,
+      `DTEND;TZID=Asia/Ho_Chi_Minh:${end}`,
+      `SUMMARY:${this._icsEscape(`${(club && club.name) || 'CLB'}: ${session.title || 'Buổi đánh cầu lông'}`)}`,
+      where ? `LOCATION:${this._icsEscape(where)}` : '',
+      session.note ? `DESCRIPTION:${this._icsEscape(session.note)}` : '',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Sắp tới giờ đánh cầu', 'TRIGGER:-PT2H', 'END:VALARM',
+      'END:VEVENT', 'END:VCALENDAR'
+    ].filter(Boolean);
+    return lines.map((l) => this._fold(l)).join('\r\n') + '\r\n';
+  },
+
+  googleCalendarUrl(session, club) {
+    const s = this._vnParts(session.date, session.startTime), e = this._vnParts(session.date, session.endTime || session.startTime) || s;
+    if (!s) return '';
+    const q = new URLSearchParams({
+      action: 'TEMPLATE', text: `${(club && club.name) || 'CLB'}: ${session.title || 'Buổi đánh cầu lông'}`, dates: `${s}/${e}`, ctz: 'Asia/Ho_Chi_Minh',
+      location: [session.courtName, session.courtAddress].filter(Boolean).join(', '), details: session.note || ''
+    });
+    return `https://calendar.google.com/calendar/render?${q.toString()}`;
+  },
+
+  addToCalendar(sessionId) {
+    const data = AppStorage.loadData();
+    const session = (data.sessions || []).find((s) => s.id === sessionId);
+    if (!session) return;
+    const ics = this.buildIcs(session, data.clubInfo);
+    if (!ics) { App.showToast('Buổi này chưa có ngày/giờ hợp lệ để thêm vào lịch.', 'warning'); return; }
+    const gUrl = this.googleCalendarUrl(session, data.clubInfo);
+    App.openModal('📅 Thêm vào lịch', `
+      <p class="text-secondary" style="font-size: 0.85rem; margin-bottom: 1rem;">${Safe.html(session.title)} • ${Safe.html(session.date)} ${Safe.html(session.startTime || '')}</p>
+      <div style="display: grid; gap: 0.6rem;">
+        <button type="button" class="btn btn-primary" onclick="UtilitiesModule.downloadIcs(${Safe.js(session.id)})"><i class="fas fa-download"></i> Tải tệp lịch (.ics) — iPhone, Outlook, Android</button>
+        ${gUrl ? `<a class="btn btn-secondary" href="${Safe.url(gUrl)}" target="_blank" rel="noopener"><i class="fab fa-google"></i> Mở Google Calendar</a>` : ''}
+        <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button>
+      </div>`);
+  },
+
+  downloadIcs(sessionId) {
+    const data = AppStorage.loadData();
+    const session = (data.sessions || []).find((s) => s.id === sessionId);
+    if (!session) return;
+    const blob = new Blob([this.buildIcs(session, data.clubInfo)], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `buoi-danh-${String(session.date || '').replace(/[^0-9-]/g, '')}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    App.closeModal();
+    App.showToast('Đã tải tệp lịch. Mở tệp để thêm vào lịch của bạn.', 'success');
+  },
+
+  // ---------------- 2) Danh sách dự bị ----------------
+  // Người đăng ký sớm hơn được ưu tiên; một lượt đăng ký gồm cả khách mang theo nên phải vừa nguyên cả nhóm.
+  splitByCapacity(goingVotes, max) {
+    const cap = Math.max(1, Number(max) || 1);
+    const sorted = (goingVotes || []).slice().sort((a, b) => String(a.votedAt || '').localeCompare(String(b.votedAt || '')));
+    let used = 0;
+    const confirmed = [], waitlist = [];
+    sorted.forEach((v) => {
+      const size = 1 + Math.max(0, Number(v.guests) || 0);
+      if (waitlist.length === 0 && used + size <= cap) { confirmed.push(v); used += size; } else { waitlist.push(v); }
+    });
+    return { confirmed, waitlist, used };
+  },
+
+  waitlistHtml(session, goingVotes, members) {
+    if (!session || session.voteMode === 'multi_option') return '';
+    const { waitlist } = this.splitByCapacity(goingVotes, session.maxPlayers);
+    if (!waitlist.length) return '';
+    const nameOf = (v) => {
+      const m = (members || []).find((x) => x.id === v.memberId);
+      return m ? m.name : 'Thành viên';
+    };
+    return `
+      <div style="margin-top: 0.85rem; padding: 0.7rem 0.85rem; border-radius: var(--radius-md); background: var(--bg-input); border: 1px dashed var(--warning, #f59e0b); font-size: 0.82rem;">
+        <b>⏳ Danh sách dự bị (${waitlist.length})</b> — đăng ký sau khi đã đủ ${Safe.html(session.maxPlayers)} chỗ. Nếu có người hủy, người đứng đầu danh sách dự bị được vào sân:
+        <ol style="margin: 0.4rem 0 0 1.1rem; padding: 0;">${waitlist.map((v) => `<li>${Safe.html(nameOf(v))}${v.guests ? ` (+${Safe.html(v.guests)} khách)` : ''}</li>`).join('')}</ol>
+      </div>`;
+  },
+
+  // ---------------- 3) Chuyên cần ----------------
+  attendance(data, days = 90, now = Date.now()) {
+    const since = now - days * 86400000;
+    const done = (data.sessions || []).filter((s) => {
+      if (!s || s.status === 'cancelled' || s.voteMode === 'multi_option') return false;
+      const end = ScheduleModule.parseSessionDateTime(s.date, s.endTime || '23:59').getTime();
+      return end < now && end >= since;
+    });
+    const counts = new Map();
+    done.forEach((s) => {
+      const seen = new Set();
+      (s.votes || []).forEach((v) => {
+        if (v && v.status === 'going' && v.memberId && !seen.has(v.memberId)) { seen.add(v.memberId); counts.set(v.memberId, (counts.get(v.memberId) || 0) + 1); }
+      });
+    });
+    const byId = new Map((data.members || []).map((m) => [m.id, m]));
+    const rows = Array.from(counts.entries()).map(([id, n]) => ({ memberId: id, name: (byId.get(id) || {}).name || 'Thành viên', count: n, rate: done.length ? Math.round((n / done.length) * 100) : 0 }))
+      .filter((r) => byId.has(r.memberId))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'vi'));
+    return { total: done.length, rows, days };
+  },
+
+  renderAttendanceCard() {
+    const box = document.getElementById('dashboard-attendance');
+    if (!box) return;
+    const user = AppStorage.getCurrentUser();
+    if (!user || AppStorage.isGuest()) { box.innerHTML = ''; return; }
+    const data = AppStorage.loadData();
+    const att = this.attendance(data);
+    if (!att.total) { box.innerHTML = ''; return; }
+    const mine = att.rows.find((r) => r.memberId === user.memberId);
+    const medal = ['🥇', '🥈', '🥉'];
+    box.innerHTML = `
+      <div class="card" style="margin-bottom: 2rem;">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fas fa-medal text-warning"></i> Chuyên cần ${att.days} ngày qua</h2>
+          <span class="text-secondary" style="font-size: 0.8rem;">${att.total} buổi đã diễn ra</span>
+        </div>
+        <div style="padding: 0 1.25rem 1.1rem;">
+          <div class="text-secondary" style="font-size: 0.8rem; margin-bottom: 0.6rem;">${mine ? `Bạn đã đăng ký đi <b>${mine.count}/${att.total}</b> buổi (${mine.rate}%).` : 'Bạn chưa đăng ký đi buổi nào trong giai đoạn này.'} <i>Tính theo bình chọn "đi"; chưa phải điểm danh tại sân.</i></div>
+          ${att.rows.slice(0, 5).map((r, i) => `
+            <div class="flex items-center justify-between" style="gap: 0.5rem; padding: 0.3rem 0; border-top: 1px dashed var(--border-color); font-size: 0.88rem;">
+              <span>${medal[i] || `${i + 1}.`} ${Safe.html(r.name)}</span>
+              <span class="text-secondary"><b>${r.count}</b> buổi • ${r.rate}%</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  },
+
+  // ---------------- 4) Cài ứng dụng ----------------
+  _isStandalone() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  },
+
+  _isIos() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent || '') && !window.MSStream;
+  },
+
+  renderInstall() {
+    const box = document.getElementById('install-app-wrapper');
+    if (!box) return;
+    if (this._isStandalone() || !(this._installEvent || this._isIos())) { box.innerHTML = ''; return; }
+    box.innerHTML = `<button type="button" class="btn btn-secondary btn-sm w-full" style="justify-content: center;" onclick="UtilitiesModule.install()"><i class="fas fa-mobile-alt"></i> Cài ứng dụng lên máy</button>`;
+  },
+
+  async install() {
+    if (this._installEvent) {
+      const ev = this._installEvent;
+      this._installEvent = null;
+      try {
+        await ev.prompt();
+        await ev.userChoice;
+      } catch (e) { /* người dùng đóng hộp thoại hoặc trình duyệt không cho hiện */ }
+      this.renderInstall();
+      return;
+    }
+    App.openModal('📲 Cài ứng dụng trên iPhone / iPad', `
+      <ol style="padding-left: 1.2rem; line-height: 1.7; font-size: 0.92rem;">
+        <li>Mở trang này bằng <b>Safari</b>.</li>
+        <li>Bấm nút <b>Chia sẻ</b> (hình vuông có mũi tên lên).</li>
+        <li>Chọn <b>Thêm vào Màn hình chính</b>.</li>
+        <li>Mở ứng dụng từ biểu tượng mới. Thông báo đẩy trên iPhone chỉ hoạt động khi đã cài như vậy (iOS 16.4 trở lên).</li>
+      </ol>
+      <div style="text-align: right;"><button type="button" class="btn btn-secondary" onclick="App.closeModal()">Đóng</button></div>`);
+  }
+};
+
+window.UtilitiesModule = UtilitiesModule;
+;
+
 // ===== js/modules/google-auth.js =====
 // GoogleAuth - Đăng nhập / đăng ký / liên kết tài khoản bằng Google (Google Identity Services)
 // - Trình duyệt chỉ lấy ID token từ Google rồi gửi lên máy chủ; máy chủ xác minh với Google và cấp phiên như đăng nhập thường.
@@ -9589,6 +9970,8 @@ const PaymentVerify = {
     this._lib = new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = this.TESSERACT_URL;
+      s.integrity = 'sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F'; // ghim đúng nội dung phiên bản 5.1.1
+      s.crossOrigin = 'anonymous';
       s.async = true;
       s.onload = () => resolve();
       s.onerror = () => { this._lib = null; reject(new Error('Không tải được thư viện đọc ảnh (kiểm tra kết nối mạng)')); };
@@ -12445,7 +12828,7 @@ const SettingsModule = {
 
         <div class="form-group">
           <label class="form-label font-bold">Mật khẩu mới *</label>
-          <input type="password" id="modal-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 6 ký tự, không dấu cách...">
+          <input type="password" id="modal-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 8 ký tự, không dấu cách...">
         </div>
 
         <div class="form-group">
@@ -12551,10 +12934,19 @@ const PushClient = {
   },
 
   // ---------------- Firebase ----------------
+  FIREBASE_SRI: {
+    '10.12.2': {
+      'firebase-app-compat.js': 'sha384-AQ3POAMqIhwS81FrUH95ekxqBZHeP5tG2JfEL3+7GuTtfRLWnrRh32UxwzM+//A9',
+      'firebase-messaging-compat.js': 'sha384-XtSlZdmg0Ad5zf0AX4W9TGdm+dGjaNK4KG3lNFjfgbnxkCEuT9ugWXkLExgQTJ+6'
+    }
+  },
+
   _script(src) {
     return new Promise((resolve, reject) => {
       const el = document.createElement('script');
       el.src = src;
+      const sri = (this.FIREBASE_SRI[this.FIREBASE_VERSION] || {})[src.split('/').pop()];
+      if (sri) { el.integrity = sri; el.crossOrigin = 'anonymous'; }
       el.async = true;
       el.onload = () => resolve();
       el.onerror = () => reject(new Error('Không tải được thư viện thông báo (kiểm tra kết nối mạng)'));
@@ -13159,6 +13551,7 @@ const App = {
     // Duyệt thành viên cố định (bảng yêu cầu + thông báo)
     if (window.MembershipModule) {
       MembershipModule.init();
+      if (window.UtilitiesModule) UtilitiesModule.init();
     }
 
     // Lịch bình chọn tự động (Ban quản trị & thành viên được Admin chỉ định)
@@ -13220,6 +13613,15 @@ const App = {
       window.addEventListener(evt, onUserActivity, { passive: true });
     });
 
+    // Gia hạn phiên trượt: lúc mở ứng dụng, khi quay lại tab, và định kỳ
+    const renew = () => { if (AppStorage.isLoggedIn()) AppStorage.refreshSession(); };
+    const upd = () => { if (!this._updateSnooze || Date.now() > this._updateSnooze) this.checkForUpdate(); };
+    setTimeout(upd, 20000);
+    setInterval(upd, 10 * 60 * 1000);
+    setTimeout(renew, 3000);
+    setInterval(renew, AppStorage.REFRESH_CHECK_MS);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renew(); });
+
     // Inactivity Watchdog: Tự động kiểm tra trạng thái hết hạn mỗi 10 giây
     setInterval(() => {
       const currentlyLoggedIn = AppStorage.isLoggedIn();
@@ -13234,7 +13636,7 @@ const App = {
 
   handleSessionExpired() {
     this.renderUserHeaderAndSidebar();
-    this.showToast("⚠️ Phiên đăng nhập đã tự động kết thúc do không hoạt động (15 phút). Bạn đang ở chế độ Khách vãng lai.", "warning");
+    this.showToast("⚠️ Phiên đăng nhập đã kết thúc (hết hạn hoặc không thao tác 30 phút khi không bật \"Duy trì đăng nhập\"). Bạn đang ở chế độ Khách vãng lai.", "warning");
     if (this.currentTab === 'settings') {
       this.openTab('dashboard');
     }
@@ -13344,16 +13746,73 @@ const App = {
     });
 
     // Lắng nghe thay đổi trạng thái CSDL và cập nhật toàn diện giao diện tức thời
-    window.addEventListener('app-state-changed', () => {
-      this.refreshDashboardStats();
-      this.renderUserHeaderAndSidebar();
-      if (window.MembersModule && typeof MembersModule.renderBenefitsAndRules === 'function') {
-        MembersModule.renderBenefitsAndRules();
-      }
-      if (this.currentTab) {
-        this.renderTabContent(this.currentTab);
-      }
-    });
+    // Dữ liệu từ máy khác tự cập nhật lên màn hình (không cần tải lại trang). Nếu người dùng đang gõ dở vào ô nhập
+    // thì hoãn vẽ lại tới khi họ rời ô đó, để không làm mất nội dung đang nhập.
+    window.addEventListener('app-state-changed', () => this.scheduleLiveRender());
+    document.addEventListener('focusout', () => { if (this._renderDeferred) setTimeout(() => this.flushDeferredRender(), 250); });
+    setInterval(() => this.flushDeferredRender(), 3000);
+  },
+
+  // Đang nhập liệu trong khu vực nội dung (không tính hộp thoại: nội dung hộp thoại không bị vẽ lại)
+  // Phát hiện bản ứng dụng mới được đăng lên máy chủ (so mã gói ?v= trong index.html) và mời cập nhật, không tự tải lại
+  async checkForUpdate() {
+    try {
+      if (location.protocol === 'file:' || this._updateShown) return;
+      const cur = (document.querySelector('script[src*="bundle.js"]') || {}).src || '';
+      const mc = cur.match(/bundle\.js\?v=([A-Za-z0-9]+)/);
+      if (!mc) return;
+      const res = await fetch(`${location.pathname}?_=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const m = (await res.text()).match(/js\/bundle\.js\?v=([A-Za-z0-9]+)/);
+      if (m && m[1] !== mc[1]) this.showUpdateBanner();
+    } catch (e) { /* mất mạng: bỏ qua */ }
+  },
+
+  showUpdateBanner() {
+    if (this._updateShown) return;
+    this._updateShown = true;
+    const bar = document.createElement('div');
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 9999; background: var(--bg-card-solid); border: 1px solid var(--primary); border-radius: 999px; padding: 0.5rem 0.6rem 0.5rem 1rem; box-shadow: var(--shadow-lg); display: flex; gap: 0.6rem; align-items: center; font-size: 0.85rem;';
+    bar.innerHTML = '<span>🔄 Có phiên bản ứng dụng mới.</span><button type="button" class="btn btn-primary btn-sm">Cập nhật</button><button type="button" class="btn btn-ghost btn-sm" aria-label="Để sau">&times;</button>';
+    const [update, later] = bar.querySelectorAll('button');
+    update.onclick = () => location.reload();
+    later.onclick = () => { bar.remove(); this._updateShown = false; this._updateSnooze = Date.now() + 30 * 60 * 1000; };
+    document.body.appendChild(bar);
+  },
+
+  isEditingContent() {
+    const el = document.activeElement;
+    if (!el || el === document.body) return false;
+    const tag = el.tagName;
+    if (!(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable)) return false;
+    if (tag === 'INPUT' && ['checkbox', 'radio', 'button', 'submit', 'range'].includes(el.type)) return false;
+    return !!el.closest('.tab-pane, main');
+  },
+
+  scheduleLiveRender() {
+    clearTimeout(this._liveTimer);
+    this._liveTimer = setTimeout(() => {
+      if (this.isEditingContent()) { this._renderDeferred = true; return; }
+      this.runLiveRender();
+    }, 150);
+  },
+
+  flushDeferredRender() {
+    if (!this._renderDeferred || this.isEditingContent()) return;
+    this.runLiveRender();
+  },
+
+  runLiveRender() {
+    this._renderDeferred = false;
+    this.refreshDashboardStats();
+    this.renderUserHeaderAndSidebar();
+    if (window.MembersModule && typeof MembersModule.renderBenefitsAndRules === 'function') {
+      MembersModule.renderBenefitsAndRules();
+    }
+    if (this.currentTab) {
+      this.renderTabContent(this.currentTab);
+    }
   },
 
   // ==========================================
@@ -13419,13 +13878,13 @@ const App = {
     if (lenCheck) {
       if (!pwd) {
         lenCheck.className = 'pwd-indicator';
-        lenCheck.innerHTML = '<i class="fas fa-circle-notch"></i> Tối thiểu từ 6 ký tự trở lên';
-      } else if (pwd.length >= 6) {
+        lenCheck.innerHTML = '<i class="fas fa-circle-notch"></i> Tối thiểu từ 8 ký tự trở lên';
+      } else if (pwd.length >= 8) {
         lenCheck.className = 'pwd-indicator valid';
-        lenCheck.innerHTML = '<i class="fas fa-check-circle"></i> Tối thiểu từ 6 ký tự (Đạt)';
+        lenCheck.innerHTML = '<i class="fas fa-check-circle"></i> Tối thiểu từ 8 ký tự (Đạt)';
       } else {
         lenCheck.className = 'pwd-indicator invalid';
-        lenCheck.innerHTML = `<i class="fas fa-times-circle"></i> Tối thiểu từ 6 ký tự (Hiện có ${pwd.length}/6)`;
+        lenCheck.innerHTML = `<i class="fas fa-times-circle"></i> Tối thiểu từ 8 ký tự (Hiện có ${pwd.length}/8)`;
       }
     }
 
@@ -13499,7 +13958,7 @@ const App = {
     const modalBody = `
       <form onsubmit="App.submitForceChangePassword(event)">
         <p class="text-secondary" style="font-size: 0.85rem; margin-bottom: 1rem;">
-          Mật khẩu hiện tại quá dễ đoán. Để bảo vệ dữ liệu CLB, vui lòng đặt mật khẩu mới (tối thiểu 6 ký tự, không trùng tên đăng nhập/SĐT, không dùng mật khẩu phổ biến).
+          Mật khẩu hiện tại quá dễ đoán. Để bảo vệ dữ liệu CLB, vui lòng đặt mật khẩu mới (tối thiểu 8 ký tự, không trùng tên đăng nhập/SĐT, không dùng mật khẩu phổ biến).
         </p>
         ${currentPassword ? '' : `
         <div class="form-group">
@@ -14208,6 +14667,7 @@ const App = {
 
         ${window.GoogleAuth ? GoogleAuth.renderProfileSection(user) : ''}
         ${window.PushClient ? PushClient.renderProfileSection(user) : ''}
+        ${this.renderSessionSection()}
 
         <!-- 3. Khu vực Đổi mật khẩu -->
         <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">
@@ -14225,7 +14685,7 @@ const App = {
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
             <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label" style="font-size: 0.8rem;">Mật khẩu mới (≥ 6 ký tự)</label>
+              <label class="form-label" style="font-size: 0.8rem;">Mật khẩu mới (≥ 8 ký tự)</label>
               <input type="password" id="profile-new-pwd" class="form-control" placeholder="Mật khẩu mới...">
             </div>
             <div class="form-group" style="margin-bottom: 0;">
@@ -14308,6 +14768,28 @@ const App = {
       if (ScheduleModule.currentViewMode === 'calendar') ScheduleModule.renderMonthCalendar();
       else ScheduleModule.renderSessions("sessions-container", ScheduleModule.currentFilter || 'upcoming');
     }
+  },
+
+  // Khung "Phiên đăng nhập" trong Hồ sơ: cho biết phiên được duy trì tới khi nào và cho phép thu hồi các thiết bị khác
+  renderSessionSection() {
+    const info = AppStorage.sessionInfo();
+    if (!info || AppStorage.isLocalOnly()) return '';
+    const until = info.expiresAt ? new Date(info.expiresAt).toLocaleDateString('vi-VN') : '';
+    return `
+        <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">
+          <div style="font-weight: 700; font-size: 0.88rem; margin-bottom: 0.35rem;"><i class="fas fa-laptop text-primary"></i> Phiên đăng nhập</div>
+          <div class="text-secondary" style="font-size: 0.78rem; margin-bottom: 0.6rem;">
+            ${info.remember ? `Thiết bị này được duy trì đăng nhập${until ? ` (gia hạn tự động khi bạn dùng ứng dụng, hiện đến ${Safe.html(until)})` : ''}.` : 'Thiết bị này tự đăng xuất khi đóng trình duyệt hoặc sau 30 phút không thao tác.'}
+            Mất máy hoặc nghi ngờ lộ tài khoản? Thu hồi các thiết bị khác ngay.
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="App.logoutOtherDevices()"><i class="fas fa-sign-out-alt"></i> Đăng xuất các thiết bị khác</button>
+        </div>`;
+  },
+
+  async logoutOtherDevices() {
+    if (!(await this.confirm('Đăng xuất tài khoản này khỏi mọi thiết bị khác? Thiết bị hiện tại vẫn giữ đăng nhập.', { title: 'Đăng xuất thiết bị khác', okText: 'Đăng xuất' }))) return;
+    const res = await AppStorage.logoutOtherDevices();
+    this.showToast(res.message, res.success ? 'success' : 'error');
   },
 
   // Modal dùng chung

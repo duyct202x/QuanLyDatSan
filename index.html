@@ -2,6 +2,9 @@
 <html lang="vi" data-theme="light">
 <head>
   <meta charset="UTF-8">
+  <!-- Siết nhẹ CSP: cấm <object>/<embed>, khóa <base> và đích gửi form (các nguồn script bên thứ ba đã ghim phiên bản + SRI) -->
+  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Anti-FOUC Theme Initialization (Browser & User-Personalized Instant Loading) -->
   <script>
@@ -38,13 +41,13 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
   <!-- Font Awesome 6 Icons -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha384-iw3OoTErCYJJB9mCa8LNS2hbsQ7M3C0EpIsO/H5+EGAkPGc6rk+V8i04oW/K5xq0" crossorigin="anonymous">
 
   <!-- Chart.js for Financial Analytics -->
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
 
   <!-- Canvas Confetti for Payment Success -->
-  <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js" integrity="sha384-HAH79XdRvHr6axVGh4xQWVCp14kcd32bNk4Xu0sHDHtFQ42n6BAM8ykvB47dGz6D" crossorigin="anonymous"></script>
 
   <!-- Application Stylesheets -->
   <!-- BUNDLE:CSS:START -->
@@ -130,6 +133,7 @@
 
         <!-- Notification Toggle Button -->
         <div id="notif-toggle-sidebar" style="margin-top: 0.5rem;"></div>
+        <div id="install-app-wrapper" style="margin-top: 0.5rem;"></div>
       </div>
     </aside>
 
@@ -271,6 +275,9 @@
               <!-- Dynamically loaded -->
             </div>
           </div>
+
+          <!-- Chuyên cần (tiện ích) -->
+          <div id="dashboard-attendance"></div>
         </div>
 
         <!-- TAB 2: SCHEDULE & VOTING -->
@@ -341,6 +348,9 @@
               </button>
               <button class="filter-tab" data-filter="past" onclick="ScheduleModule.setFilter('past', this)">
                 <i class="fas fa-history"></i> <span>Đã kết thúc</span>
+              </button>
+              <button class="filter-tab member-fixed-only" data-filter="mine" onclick="ScheduleModule.setFilter('mine', this)" title="Các buổi sắp tới mà bạn đã bình chọn đi">
+                <i class="fas fa-user-check"></i> <span>Của tôi</span>
               </button>
               <button class="filter-tab" data-filter="all" onclick="ScheduleModule.setFilter('all', this)">
                 <i class="fas fa-list"></i> <span>Tất cả</span>
@@ -1165,7 +1175,7 @@
                   <div class="responsive-form-row">
                     <div class="form-group">
                       <label class="form-label font-bold">Mật khẩu mới *</label>
-                      <input type="password" id="set-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 6 ký tự...">
+                      <input type="password" id="set-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 8 ký tự...">
                     </div>
                     <div class="form-group">
                       <label class="form-label font-bold">Nhập lại mật khẩu mới *</label>
@@ -1250,7 +1260,7 @@
 
           <label class="auth-check">
             <input type="checkbox" id="auth-login-remember" name="remember" checked>
-            <span>Ghi nhớ đăng nhập</span>
+            <span>Duy trì đăng nhập trên thiết bị này <small class="text-secondary" style="display: block; font-weight: 400;">Không phải đăng nhập lại (tối đa 30 ngày; Ban quản trị 7 ngày). Chỉ bật trên máy của bạn.</small></span>
           </label>
 
           <button type="submit" class="btn btn-primary auth-submit">Đăng nhập</button>
@@ -1278,13 +1288,13 @@
           <label class="auth-label" for="auth-reg-password">Mật khẩu</label>
           <div class="auth-field">
             <i class="fas fa-lock"></i>
-            <input type="password" id="auth-reg-password" name="new-password" class="form-control" autocomplete="new-password" placeholder="Tối thiểu 6 ký tự" required oninput="App.validatePasswordPolicy()">
+            <input type="password" id="auth-reg-password" name="new-password" class="form-control" autocomplete="new-password" placeholder="Tối thiểu 8 ký tự" required oninput="App.validatePasswordPolicy()">
             <button type="button" class="password-toggle-btn" onclick="App.togglePasswordVisibility('auth-reg-password', this)" aria-label="Hiện mật khẩu"><i class="fas fa-eye"></i></button>
           </div>
           <!-- Quy định mật khẩu (một dòng gọn) -->
           <div class="pwd-rules-box" id="auth-pwd-rules-box">
             <div class="pwd-rules-title"><i class="fas fa-shield-alt"></i> Quy định đặt mật khẩu:</div>
-            <div class="pwd-indicator" id="pwd-len-check"><i class="fas fa-circle-notch"></i> Từ 6 ký tự</div>
+            <div class="pwd-indicator" id="pwd-len-check"><i class="fas fa-circle-notch"></i> Từ 8 ký tự</div>
             <div class="pwd-indicator" id="pwd-space-check"><i class="fas fa-circle-notch"></i> Không có dấu cách</div>
           </div>
 
@@ -1339,7 +1349,7 @@
 
   <!-- Core App Scripts (?v=: đổi khi phát hành để thiết bị cũ không chạy mã đồng bộ cũ trong bộ nhớ đệm) -->
   <!-- BUNDLE:JS:START -->
-  <script src="js/bundle.js?v=65042051d6"></script>
+  <script src="js/bundle.js?v=f9ad741105"></script>
   <!-- BUNDLE:JS:END -->
 
 </body>

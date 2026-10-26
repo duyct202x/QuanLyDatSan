@@ -39,8 +39,10 @@ Object.assign(ScheduleModule, {
     // Số buổi ở các bộ lọc: Sắp diễn ra / Đã kết thúc / Tất cả
     const nowTs = new Date();
     const upcomingN = sessions.filter(s => this.parseSessionDateTime(s.date, s.endTime || '23:59') >= nowTs).length;
-    const counts = { upcoming: upcomingN, past: sessions.length - upcomingN, all: sessions.length };
-    const baseLabels = { upcoming: 'Sắp diễn ra', past: 'Đã kết thúc', all: 'Tất cả' };
+    const me = AppStorage.getCurrentUser();
+    const mineN = me ? sessions.filter(s => s.status !== 'cancelled' && this.parseSessionDateTime(s.date, s.endTime || '23:59') >= nowTs && this.isMine(s, me.memberId)).length : 0;
+    const counts = { upcoming: upcomingN, past: sessions.length - upcomingN, all: sessions.length, mine: mineN };
+    const baseLabels = { upcoming: 'Sắp diễn ra', past: 'Đã kết thúc', all: 'Tất cả', mine: 'Của tôi' };
     document.querySelectorAll('#tab-schedule .filter-tab').forEach(btn => {
       const f = btn.getAttribute('data-filter');
       const label = btn.querySelector('span');
@@ -91,6 +93,9 @@ Object.assign(ScheduleModule, {
       if (filter === 'past') {
         listTitle.innerHTML = '<i class="fas fa-history text-secondary"></i> Danh sách buổi đánh đã kết thúc';
         if (listSubtitle) listSubtitle.innerText = 'Lịch sử các trận đấu đã diễn ra và chốt số lượng người tham gia';
+      } else if (filter === 'mine') {
+        listTitle.innerHTML = '<i class="fas fa-user-check text-primary"></i> Các buổi bạn đã đăng ký đi';
+        if (listSubtitle) listSubtitle.innerText = 'Buổi sắp tới mà bạn đã bình chọn tham gia';
       } else if (filter === 'all') {
         listTitle.innerHTML = '<i class="fas fa-list-check text-primary"></i> Tất cả buổi đánh & khảo sát';
         if (listSubtitle) listSubtitle.innerText = 'Toàn bộ danh sách lịch đặt sân đã lưu trên hệ thống';

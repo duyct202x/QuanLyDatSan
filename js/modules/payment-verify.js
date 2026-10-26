@@ -22,6 +22,8 @@ const PaymentVerify = {
     this._lib = new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = this.TESSERACT_URL;
+      s.integrity = 'sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F'; // ghim đúng nội dung phiên bản 5.1.1
+      s.crossOrigin = 'anonymous';
       s.async = true;
       s.onload = () => resolve();
       s.onerror = () => { this._lib = null; reject(new Error('Không tải được thư viện đọc ảnh (kiểm tra kết nối mạng)')); };

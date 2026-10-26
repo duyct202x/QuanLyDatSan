@@ -29,6 +29,7 @@ const App = {
     // Duyệt thành viên cố định (bảng yêu cầu + thông báo)
     if (window.MembershipModule) {
       MembershipModule.init();
+      if (window.UtilitiesModule) UtilitiesModule.init();
     }
 
     // Lịch bình chọn tự động (Ban quản trị & thành viên được Admin chỉ định)
@@ -90,6 +91,15 @@ const App = {
       window.addEventListener(evt, onUserActivity, { passive: true });
     });
 
+    // Gia hạn phiên trượt: lúc mở ứng dụng, khi quay lại tab, và định kỳ
+    const renew = () => { if (AppStorage.isLoggedIn()) AppStorage.refreshSession(); };
+    const upd = () => { if (!this._updateSnooze || Date.now() > this._updateSnooze) this.checkForUpdate(); };
+    setTimeout(upd, 20000);
+    setInterval(upd, 10 * 60 * 1000);
+    setTimeout(renew, 3000);
+    setInterval(renew, AppStorage.REFRESH_CHECK_MS);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renew(); });
+
     // Inactivity Watchdog: Tự động kiểm tra trạng thái hết hạn mỗi 10 giây
     setInterval(() => {
       const currentlyLoggedIn = AppStorage.isLoggedIn();
@@ -104,7 +114,7 @@ const App = {
 
   handleSessionExpired() {
     this.renderUserHeaderAndSidebar();
-    this.showToast("⚠️ Phiên đăng nhập đã tự động kết thúc do không hoạt động (15 phút). Bạn đang ở chế độ Khách vãng lai.", "warning");
+    this.showToast("⚠️ Phiên đăng nhập đã kết thúc (hết hạn hoặc không thao tác 30 phút khi không bật \"Duy trì đăng nhập\"). Bạn đang ở chế độ Khách vãng lai.", "warning");
     if (this.currentTab === 'settings') {
       this.openTab('dashboard');
     }
@@ -214,16 +224,73 @@ const App = {
     });
 
     // Lắng nghe thay đổi trạng thái CSDL và cập nhật toàn diện giao diện tức thời
-    window.addEventListener('app-state-changed', () => {
-      this.refreshDashboardStats();
-      this.renderUserHeaderAndSidebar();
-      if (window.MembersModule && typeof MembersModule.renderBenefitsAndRules === 'function') {
-        MembersModule.renderBenefitsAndRules();
-      }
-      if (this.currentTab) {
-        this.renderTabContent(this.currentTab);
-      }
-    });
+    // Dữ liệu từ máy khác tự cập nhật lên màn hình (không cần tải lại trang). Nếu người dùng đang gõ dở vào ô nhập
+    // thì hoãn vẽ lại tới khi họ rời ô đó, để không làm mất nội dung đang nhập.
+    window.addEventListener('app-state-changed', () => this.scheduleLiveRender());
+    document.addEventListener('focusout', () => { if (this._renderDeferred) setTimeout(() => this.flushDeferredRender(), 250); });
+    setInterval(() => this.flushDeferredRender(), 3000);
+  },
+
+  // Đang nhập liệu trong khu vực nội dung (không tính hộp thoại: nội dung hộp thoại không bị vẽ lại)
+  // Phát hiện bản ứng dụng mới được đăng lên máy chủ (so mã gói ?v= trong index.html) và mời cập nhật, không tự tải lại
+  async checkForUpdate() {
+    try {
+      if (location.protocol === 'file:' || this._updateShown) return;
+      const cur = (document.querySelector('script[src*="bundle.js"]') || {}).src || '';
+      const mc = cur.match(/bundle\.js\?v=([A-Za-z0-9]+)/);
+      if (!mc) return;
+      const res = await fetch(`${location.pathname}?_=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const m = (await res.text()).match(/js\/bundle\.js\?v=([A-Za-z0-9]+)/);
+      if (m && m[1] !== mc[1]) this.showUpdateBanner();
+    } catch (e) { /* mất mạng: bỏ qua */ }
+  },
+
+  showUpdateBanner() {
+    if (this._updateShown) return;
+    this._updateShown = true;
+    const bar = document.createElement('div');
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 9999; background: var(--bg-card-solid); border: 1px solid var(--primary); border-radius: 999px; padding: 0.5rem 0.6rem 0.5rem 1rem; box-shadow: var(--shadow-lg); display: flex; gap: 0.6rem; align-items: center; font-size: 0.85rem;';
+    bar.innerHTML = '<span>🔄 Có phiên bản ứng dụng mới.</span><button type="button" class="btn btn-primary btn-sm">Cập nhật</button><button type="button" class="btn btn-ghost btn-sm" aria-label="Để sau">&times;</button>';
+    const [update, later] = bar.querySelectorAll('button');
+    update.onclick = () => location.reload();
+    later.onclick = () => { bar.remove(); this._updateShown = false; this._updateSnooze = Date.now() + 30 * 60 * 1000; };
+    document.body.appendChild(bar);
+  },
+
+  isEditingContent() {
+    const el = document.activeElement;
+    if (!el || el === document.body) return false;
+    const tag = el.tagName;
+    if (!(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable)) return false;
+    if (tag === 'INPUT' && ['checkbox', 'radio', 'button', 'submit', 'range'].includes(el.type)) return false;
+    return !!el.closest('.tab-pane, main');
+  },
+
+  scheduleLiveRender() {
+    clearTimeout(this._liveTimer);
+    this._liveTimer = setTimeout(() => {
+      if (this.isEditingContent()) { this._renderDeferred = true; return; }
+      this.runLiveRender();
+    }, 150);
+  },
+
+  flushDeferredRender() {
+    if (!this._renderDeferred || this.isEditingContent()) return;
+    this.runLiveRender();
+  },
+
+  runLiveRender() {
+    this._renderDeferred = false;
+    this.refreshDashboardStats();
+    this.renderUserHeaderAndSidebar();
+    if (window.MembersModule && typeof MembersModule.renderBenefitsAndRules === 'function') {
+      MembersModule.renderBenefitsAndRules();
+    }
+    if (this.currentTab) {
+      this.renderTabContent(this.currentTab);
+    }
   },
 
   // ==========================================
@@ -289,13 +356,13 @@ const App = {
     if (lenCheck) {
       if (!pwd) {
         lenCheck.className = 'pwd-indicator';
-        lenCheck.innerHTML = '<i class="fas fa-circle-notch"></i> Tối thiểu từ 6 ký tự trở lên';
-      } else if (pwd.length >= 6) {
+        lenCheck.innerHTML = '<i class="fas fa-circle-notch"></i> Tối thiểu từ 8 ký tự trở lên';
+      } else if (pwd.length >= 8) {
         lenCheck.className = 'pwd-indicator valid';
-        lenCheck.innerHTML = '<i class="fas fa-check-circle"></i> Tối thiểu từ 6 ký tự (Đạt)';
+        lenCheck.innerHTML = '<i class="fas fa-check-circle"></i> Tối thiểu từ 8 ký tự (Đạt)';
       } else {
         lenCheck.className = 'pwd-indicator invalid';
-        lenCheck.innerHTML = `<i class="fas fa-times-circle"></i> Tối thiểu từ 6 ký tự (Hiện có ${pwd.length}/6)`;
+        lenCheck.innerHTML = `<i class="fas fa-times-circle"></i> Tối thiểu từ 8 ký tự (Hiện có ${pwd.length}/8)`;
       }
     }
 
@@ -369,7 +436,7 @@ const App = {
     const modalBody = `
       <form onsubmit="App.submitForceChangePassword(event)">
         <p class="text-secondary" style="font-size: 0.85rem; margin-bottom: 1rem;">
-          Mật khẩu hiện tại quá dễ đoán. Để bảo vệ dữ liệu CLB, vui lòng đặt mật khẩu mới (tối thiểu 6 ký tự, không trùng tên đăng nhập/SĐT, không dùng mật khẩu phổ biến).
+          Mật khẩu hiện tại quá dễ đoán. Để bảo vệ dữ liệu CLB, vui lòng đặt mật khẩu mới (tối thiểu 8 ký tự, không trùng tên đăng nhập/SĐT, không dùng mật khẩu phổ biến).
         </p>
         ${currentPassword ? '' : `
         <div class="form-group">
@@ -1078,6 +1145,7 @@ const App = {
 
         ${window.GoogleAuth ? GoogleAuth.renderProfileSection(user) : ''}
         ${window.PushClient ? PushClient.renderProfileSection(user) : ''}
+        ${this.renderSessionSection()}
 
         <!-- 3. Khu vực Đổi mật khẩu -->
         <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">
@@ -1095,7 +1163,7 @@ const App = {
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
             <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label" style="font-size: 0.8rem;">Mật khẩu mới (≥ 6 ký tự)</label>
+              <label class="form-label" style="font-size: 0.8rem;">Mật khẩu mới (≥ 8 ký tự)</label>
               <input type="password" id="profile-new-pwd" class="form-control" placeholder="Mật khẩu mới...">
             </div>
             <div class="form-group" style="margin-bottom: 0;">
@@ -1178,6 +1246,28 @@ const App = {
       if (ScheduleModule.currentViewMode === 'calendar') ScheduleModule.renderMonthCalendar();
       else ScheduleModule.renderSessions("sessions-container", ScheduleModule.currentFilter || 'upcoming');
     }
+  },
+
+  // Khung "Phiên đăng nhập" trong Hồ sơ: cho biết phiên được duy trì tới khi nào và cho phép thu hồi các thiết bị khác
+  renderSessionSection() {
+    const info = AppStorage.sessionInfo();
+    if (!info || AppStorage.isLocalOnly()) return '';
+    const until = info.expiresAt ? new Date(info.expiresAt).toLocaleDateString('vi-VN') : '';
+    return `
+        <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: 1rem;">
+          <div style="font-weight: 700; font-size: 0.88rem; margin-bottom: 0.35rem;"><i class="fas fa-laptop text-primary"></i> Phiên đăng nhập</div>
+          <div class="text-secondary" style="font-size: 0.78rem; margin-bottom: 0.6rem;">
+            ${info.remember ? `Thiết bị này được duy trì đăng nhập${until ? ` (gia hạn tự động khi bạn dùng ứng dụng, hiện đến ${Safe.html(until)})` : ''}.` : 'Thiết bị này tự đăng xuất khi đóng trình duyệt hoặc sau 30 phút không thao tác.'}
+            Mất máy hoặc nghi ngờ lộ tài khoản? Thu hồi các thiết bị khác ngay.
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="App.logoutOtherDevices()"><i class="fas fa-sign-out-alt"></i> Đăng xuất các thiết bị khác</button>
+        </div>`;
+  },
+
+  async logoutOtherDevices() {
+    if (!(await this.confirm('Đăng xuất tài khoản này khỏi mọi thiết bị khác? Thiết bị hiện tại vẫn giữ đăng nhập.', { title: 'Đăng xuất thiết bị khác', okText: 'Đăng xuất' }))) return;
+    const res = await AppStorage.logoutOtherDevices();
+    this.showToast(res.message, res.success ? 'success' : 'error');
   },
 
   // Modal dùng chung

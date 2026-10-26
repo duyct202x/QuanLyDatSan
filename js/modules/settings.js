@@ -584,7 +584,7 @@ const SettingsModule = {
 
         <div class="form-group">
           <label class="form-label font-bold">Mật khẩu mới *</label>
-          <input type="password" id="modal-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 6 ký tự, không dấu cách...">
+          <input type="password" id="modal-admin-new-pwd" class="form-control" required placeholder="Tối thiểu 8 ký tự, không dấu cách...">
         </div>
 
         <div class="form-group">

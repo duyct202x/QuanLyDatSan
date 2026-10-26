@@ -214,6 +214,9 @@ Object.assign(ScheduleModule, {
           <button class="btn btn-secondary" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})">
             <i class="fas fa-share-alt"></i> Chia sẻ Zalo
           </button>
+          <button class="btn btn-secondary" onclick="UtilitiesModule.addToCalendar(${Safe.js(session.id)})" title="Thêm vào lịch điện thoại">
+            <i class="far fa-calendar-plus"></i> Thêm vào lịch
+          </button>
           ${isAdmin ? `
             <button class="btn btn-outline-danger" onclick="ScheduleModule.confirmDeleteSession(${Safe.js(session.id)})" title="Xóa buổi khảo sát này">
               <i class="fas fa-trash-alt"></i> Xóa buổi này
@@ -333,6 +336,7 @@ Object.assign(ScheduleModule, {
             <div class="progress-bar-fill" style="width: ${capPercent}%;"></div>
           </div>
         </div>
+        ${UtilitiesModule.waitlistHtml(session, going, members)}
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem;">
@@ -379,7 +383,7 @@ Object.assign(ScheduleModule, {
             <button type="button" class="btn btn-outline-primary btn-sm" onclick="ScheduleModule.copyAddress(${Safe.js(session.courtAddress || (data.clubInfo ? data.clubInfo.address : "") || session.courtName || session.court || "Sân cầu lông")})" title="Sao chép địa chỉ">
               <i class="far fa-copy"></i> Sao chép
             </button>
-            <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" class="btn btn-primary btn-sm" title="Mở bản đồ Google Maps và dẫn đường">
+            <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Mở bản đồ Google Maps và dẫn đường">
               <i class="fas fa-directions"></i> Chỉ đường Maps
             </a>
           </div>
@@ -396,7 +400,7 @@ Object.assign(ScheduleModule, {
             referrerpolicy="no-referrer-when-downgrade"
             src="https://maps.google.com/maps?q=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}&t=&z=15&ie=UTF8&iwloc=&output=embed">
           </iframe>
-          <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" class="map-overlay-badge">
+          <a href="${Safe.url(session.mapUrl || (data.clubInfo && data.clubInfo.mapUrl) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(session.courtAddress || session.courtName || session.court || "Sân cầu lông")}`)}" target="_blank" rel="noopener noreferrer" class="map-overlay-badge">
             <i class="fas fa-external-link-alt text-primary"></i> Mở Google Maps
           </a>
         </div>
@@ -431,6 +435,9 @@ Object.assign(ScheduleModule, {
         </button>
         <button class="btn btn-secondary btn-sm" onclick="ScheduleModule.shareSession(${Safe.js(session.id)})">
           <i class="fas fa-share-alt"></i> Chia sẻ Zalo
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="UtilitiesModule.addToCalendar(${Safe.js(session.id)})" title="Thêm vào lịch điện thoại">
+          <i class="far fa-calendar-plus"></i> Thêm vào lịch
         </button>
         ${isAdmin ? `
           <button class="btn btn-secondary btn-sm" onclick="App.closeModal(); App.openTab('bill-splitter'); BillSplitterModule.loadSessionForBill(${Safe.js(session.id)});">

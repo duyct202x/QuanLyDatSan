@@ -35,6 +35,12 @@ const ScheduleModule = {
     this.renderSessions('schedule-upcoming-list', this.currentFilter || 'upcoming');
   },
 
+  // Buổi mà thành viên đã bình chọn "đi" (hoặc chọn phương án ở buổi khảo sát)
+  isMine(session, memberId) {
+    if (!session || !memberId) return false;
+    return (session.votes || []).some(v => v && v.memberId === memberId && (session.voteMode === 'multi_option' ? !v.notGoing && (v.selectedOptions || []).length > 0 : v.status === 'going'));
+  },
+
   // Safe Date-Time Parser to prevent Invalid Date exceptions
   parseSessionDateTime(dateStr, timeStr) {
     if (!dateStr) return new Date();
@@ -197,6 +203,7 @@ const ScheduleModule = {
       const sessionDate = this.parseSessionDateTime(s.date, s.endTime || '23:59');
       if (filter === 'upcoming') return sessionDate >= now;
       if (filter === 'past') return sessionDate < now;
+      if (filter === 'mine') return sessionDate >= now && s.status !== 'cancelled' && this.isMine(s, currentMemberId);
       return true;
     }).sort((a, b) => this.parseSessionDateTime(a.date, a.startTime) - this.parseSessionDateTime(b.date, b.startTime));
 
