@@ -96,7 +96,7 @@ const App = {
     const upd = () => { if (!this._updateSnooze || Date.now() > this._updateSnooze) this.checkForUpdate(); };
     setTimeout(upd, 20000);
     setInterval(upd, 10 * 60 * 1000);
-    setTimeout(renew, 3000);
+    setTimeout(() => { if (AppStorage.isLoggedIn()) AppStorage.refreshSession(true); }, 3000); // xác minh phiên ngay khi mở ứng dụng
     setInterval(renew, AppStorage.REFRESH_CHECK_MS);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renew(); });
 

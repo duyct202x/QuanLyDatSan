@@ -2740,6 +2740,13 @@ const AppStorage = {
       if (env !== this._env) return false; // Đã chuyển môi trường trong lúc chờ mạng
       if (res.status !== 'unchanged') this._meta.viewer = viewer;
       await this._applyServerResponse(res, batch, auth);
+      // Máy chủ coi mình là khách dù thiết bị đang giữ token -> token không còn hợp lệ (đổi mật khẩu, đăng xuất thiết bị khác,
+      // máy chủ đổi khóa ký...). Xác minh ngay để đăng xuất rõ ràng thay vì để giao diện "đăng nhập" nhưng chỉ nhận dữ liệu khách.
+      const tokenRejected = (res.status === 'ok' && res.viewer === null) || (res.status === 'unchanged' && res.tokenOk === false);
+      if (viewer && tokens[viewer] && tokenRejected && !this._checkingToken) {
+        this._checkingToken = true;
+        this.refreshSession(true).finally(() => { this._checkingToken = false; });
+      }
       this._failCount = 0;
       this.lastSyncedTime = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
       this._refreshBadge();
@@ -13618,7 +13625,7 @@ const App = {
     const upd = () => { if (!this._updateSnooze || Date.now() > this._updateSnooze) this.checkForUpdate(); };
     setTimeout(upd, 20000);
     setInterval(upd, 10 * 60 * 1000);
-    setTimeout(renew, 3000);
+    setTimeout(() => { if (AppStorage.isLoggedIn()) AppStorage.refreshSession(true); }, 3000); // xác minh phiên ngay khi mở ứng dụng
     setInterval(renew, AppStorage.REFRESH_CHECK_MS);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renew(); });
 
